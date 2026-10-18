@@ -33,7 +33,13 @@ Selain ──POST /api/lumi { messages }──▶ Next.js-reitti ──stream─
 
 - **Puhe** – `components/demo/useSpeech.ts` käyttää selaimen SpeechSynthesis API:a (`fi-FI`). Jokaisessa Lumin vastauksessa on kaiutinpainike, ja ”Puhe päällä / pois” -kytkimellä Lumi lukee vastaukset automaattisesti (valinta muistetaan selaimessa). Teksti luetaan lause kerrallaan ilman emojeja. Puheen aikana Lumi-hahmon ympärillä aaltoilee valo ja suu liikkuu. Äänen laatu riippuu laitteen suomenkielisestä puheäänestä.
 
-- **Puhekeskustelu** – `components/demo/useVoiceInput.ts` + `Voice.tsx` käyttävät selaimen SpeechRecognition API:a (`fi-FI`, Chrome/Edge/Safari). Mikki käynnistyy **vain**, kun lapsi painaa mikkipainiketta. Puhe näkyy reaaliajassa ja viesti lähtee itsestään, kun lapsi lopettaa puhumisen (1,5 s hiljaisuus valmiin lauseen jälkeen, 2,6 s kesken lauseen). Kun lapsi on puhunut, Lumi vastaa ääneen, minkä jälkeen mikki pysyy pois päältä ja näkyvissä on *”Mitä haluaisit sanoa seuraavaksi? Mikki on pois päältä. Paina mikrofonia vastataksesi.”* Tila näkyy aina: punainen *MIKKI PÄÄLLÄ* vain kun mikki oikeasti kuuntelee; muuten *Lumi miettii… / Lumi puhuu* + *Mikki on pois päältä*. Androidilla käytetään yksittäisiä lausumia, koska jatkuva tila toistaa siellä sanoja.
+- **Puhekeskustelu** – `components/demo/useVoiceSession.ts` + `Voice.tsx` (Web Speech API, `fi-FI`, Chrome/Edge/Safari). Lapsi painaa mikkiä **kerran**, minkä jälkeen keskustelu jatkuu itsestään:
+  - jatkuva tunnistus (`continuous`, Androidilla yksittäiset lausumat), joka käynnistetään hiljaa uudelleen aina kun selain lopettaa sen (hiljaisuus, aikaraja, välilehden vaihto); nopeiden uudelleenkäynnistysten silmukka estetään;
+  - lausuman loppu tunnistetaan tauosta (1,6 s valmiin lauseen jälkeen, 2,8 s kesken lauseen), ja viesti lähtee Lumille;
+  - kun Lumi miettii tai puhuu, tunnistus on **tauolla** (tunnistin pysäytetään kokonaan, jottei Lumi kuule itseään), ja se jatkuu 0,45 s Lumin puheen jälkeen;
+  - hiljaisuus ei katkaise keskustelua – lapsi saa miettiä rauhassa. Vasta 3 minuutin täydellisen hiljaisuuden jälkeen keskustelu ”jää lepäämään” (yksityisyys, akku);
+  - tietokoneella mikin äänitaso (`getUserMedia` + AnalyserNode) näkyy rauhallisena hengittävänä pisteenä; mobiilissa käytetään tunnistimen omaa puheen alun tunnistusta;
+  - tilat: *MIKKI PÄÄLLÄ – Ajattele rauhassa / Olen täällä, kun haluat jatkaa / Voit vastata milloin tahansa*, *Kuulen sinut* (sanat reaaliajassa), *Lumi miettii / Lumi puhuu – kuuntelu on tauolla*. Keskustelun voi lopettaa mikkipainikkeesta tai ”Lopeta puhekeskustelu”.
 
 - **Kuvat** – lapsi voi ottaa kuvan kameralla (puhelimessa avautuu puhelimen kamera, tietokoneella sivun oma webkamera-näkymä), valita kuvan tiedostona, raahata sen keskusteluun tai liittää leikepöydältä. Kuva pienennetään selaimessa (`components/demo/image.ts`, enint. 1568 px, JPEG) ja lähetetään samalle Claude-mallille kuvalohkona. Järjestelmäohjeen kuvaosio ohjaa Lumia tunnistamaan tehtävän, pyytämään uuden kuvan jos teksti ei erotu, ja ohjaamaan pedagogisesti antamatta vastausta. Pyynnössä on enintään kaksi uusinta kuvaa; palvelin tarkistaa tyypin ja koon (`lib/lumi/server.ts`).
 
@@ -50,7 +56,7 @@ Asetukset (`.env.local`): `ANTHROPIC_API_KEY`, `LUMI_MODEL`, `LUMI_EFFORT` (`low
 | `components/demo/Demo.tsx` | Keskustelunäkymä, Lumi-hahmo, polku, oivallukset |
 | `components/demo/client.ts` | SSE-lukija selaimeen |
 | `components/demo/useSpeech.ts` | Ääneen lukeminen (SpeechSynthesis, fi-FI) |
-| `components/demo/useVoiceInput.ts`, `Voice.tsx` | Puheentunnistus ja mikin tilanäkymä |
+| `components/demo/useVoiceSession.ts`, `Voice.tsx` | Jatkuva puhekeskustelu ja sen tilanäkymä |
 | `components/demo/image.ts`, `ImageAttach.tsx` | Kuvan valmistelu, kamera, tiedosto, raahaus |
 | `components/LumiCharacter.tsx` | Lumi-hahmo (SVG + Framer Motion) |
 

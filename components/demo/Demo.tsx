@@ -7,7 +7,7 @@ import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import { PHASES, type LumiMeta, type LumiPhase } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
-import { useVoiceInput } from "./useVoiceInput";
+import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
 import { prepareImage, type PreparedImage } from "./image";
 import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
@@ -72,7 +72,6 @@ export default function Demo() {
   const [meta, setMeta] = useState<LumiMeta | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
-  const [conversation, setConversationState] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [attachment, setAttachment] = useState<PreparedImage | null>(null);
@@ -85,19 +84,15 @@ export default function Demo() {
   const speechRef = useRef(speech);
   speechRef.current = speech;
 
-  // Spoken messages go straight to Lumi – no extra send step.
-  const sendRef = useRef<(text: string, viaVoice?: boolean) => void>(() => {});
-  const voice = useVoiceInput((text) => sendRef.current(text, true));
-
   /**
-   * Spoken dialog: when the child speaks, Lumi answers aloud. The mic is never
-   * reopened automatically – the child always decides when to talk.
+   * Continuous spoken conversation: the child presses the mic once. Each utterance
+   * goes straight to Lumi, recognition pauses while Lumi thinks and speaks, and
+   * listening resumes by itself afterwards.
    */
-  const conversationRef = useRef(false);
-  const setConversation = (on: boolean) => {
-    conversationRef.current = on;
-    setConversationState(on);
-  };
+  const sendRef = useRef<(text: string) => void>(() => {});
+  const voice = useVoiceSession((text) => sendRef.current(text));
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
 
   const abortRef = useRef<AbortController | null>(null);
   const msgsRef = useRef(msgs);
@@ -126,12 +121,7 @@ export default function Demo() {
 
   // Lumi looks attentive while the child is talking.
   useEffect(() => {
-    if (voice.active) setMood("curious");
-  }, [voice.active]);
-
-  // If the mic fails or hears nothing, leave hands-free mode instead of looping.
-  useEffect(() => {
-    if (voice.state === "error") setConversation(false);
+    if (voice.state === "hearing") setMood("curious");
   }, [voice.state]);
 
   const patchMsg = (id: number, patch: Partial<ChatMsg> | ((m: ChatMsg) => Partial<ChatMsg>)) =>
@@ -172,12 +162,15 @@ export default function Demo() {
           spoken ||= EMPTY_TEXT;
           patchMsg(lumiId, { status: "done", text: spoken });
         }
-        if (conversationRef.current || speechRef.current.autoSpeak) speechRef.current.speak(lumiId, spoken);
+        // In a spoken conversation Lumi always answers aloud; listening resumes when she is done.
+        if (voiceRef.current.active || speechRef.current.autoSpeak) {
+          speechRef.current.speak(lumiId, spoken, () => voiceRef.current.resume());
+        }
       },
       onError: (message) => {
         patchMsg(lumiId, { text: message, status: "error" });
         setMood("curious");
-        setConversation(false);
+        voiceRef.current.resume();
       },
     });
 
@@ -186,16 +179,15 @@ export default function Demo() {
     setBusy(false);
     if (gotMeta?.celebrate) setTimeout(() => setMood("happy"), 2600);
     else if (gotMeta) setMood(gotMeta.mood === "think" ? "idle" : gotMeta.mood);
-    if (!conversationRef.current && window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus({ preventScroll: true });
+    if (!voiceRef.current.active && window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus({ preventScroll: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const send = (raw: string, viaVoice = false) => {
+  const send = (raw: string) => {
     const text = raw.trim();
     const image = attachment ?? undefined;
     if ((!text && !image) || busy || preparing) return;
-    if (!viaVoice) voice.cancel();
-    setConversation(viaVoice);
+    voice.pause(); // never let the mic hear Lumi thinking out loud
     speech.stop();
     setDraft("");
     setAttachment(null);
@@ -262,26 +254,38 @@ export default function Demo() {
 
   sendRef.current = send;
 
-  const listen = () => {
+  const startVoice = () => {
     speech.stop(); // never let the mic hear Lumi's own voice
     voice.start();
   };
 
-  const endConversation = () => {
-    setConversation(false);
+  const endVoice = () => {
     speech.stop();
-    voice.cancel();
+    voice.end();
+  };
+
+  /** Silencing Lumi hands the turn back to the child. */
+  const stopSpeaking = () => {
+    speech.stop();
+    voice.resume();
+  };
+
+  const speakMessage = (m: ChatMsg) => {
+    if (speech.speakingId === m.id) return stopSpeaking();
+    voice.pause();
+    speech.speak(m.id, m.text, () => voiceRef.current.resume());
   };
 
   const retry = () => {
     if (busy) return;
+    voice.pause();
     ask(msgsRef.current.filter((m) => m.status !== "error"));
   };
 
   const reset = () => {
     abortRef.current?.abort();
     speech.stop();
-    voice.cancel();
+    voice.end();
     setMsgs([]);
     setNotes([]);
     setMeta(null);
@@ -290,7 +294,6 @@ export default function Demo() {
     setDraft("");
     setAttachment(null);
     setImageError(null);
-    setConversation(false);
     setMood("curious");
     setSheet(false);
     setPhase("start");
@@ -300,9 +303,9 @@ export default function Demo() {
   const toggle = (
     <SpeechToggle
       supported={speech.supported}
-      on={speech.autoSpeak || conversation}
+      on={speech.autoSpeak || voice.active}
       onChange={(on) => {
-        if (!on && conversationRef.current) endConversation();
+        if (!on && voice.active) endVoice();
         speech.setAutoSpeak(on);
       }}
     />
@@ -310,31 +313,19 @@ export default function Demo() {
 
   const micButton = (big?: boolean) =>
     voice.supported ? (
-      <MicButton
-        voice={voice}
-        big={big}
-        disabled={busy}
-        invite={conversation && !busy && !lumiSpeaking && voice.state === "idle"}
-        onStart={listen}
-        onStop={voice.stop}
-      />
+      <MicButton voice={voice} big={big} disabled={busy} onStart={startVoice} onEnd={endVoice} />
     ) : null;
 
   const composer = (placeholder: string) => (
     <div className="border-t border-ink/[0.06] bg-white/85 backdrop-blur">
       <VoicePanel
         voice={voice}
-        conversation={conversation}
-        lumi={busy ? "thinking" : lumiSpeaking ? "speaking" : phase === "chat" && msgs.length > 0 ? "done" : null}
-        onSendNow={voice.stop}
-        onCancel={endConversation}
-        onRetry={listen}
-        onDismiss={() => {
-          voice.dismissError();
-          setConversation(false);
-        }}
-        onStopSpeaking={speech.stop}
-        onEndConversation={endConversation}
+        lumi={busy ? "thinking" : lumiSpeaking ? "speaking" : null}
+        onStopSpeaking={stopSpeaking}
+        onSendNow={voice.sendNow}
+        onEnd={endVoice}
+        onRestart={startVoice}
+        onDismiss={voice.dismiss}
       />
       <AttachmentPreview src={attachment?.dataUrl ?? null} busy={preparing} onRemove={() => setAttachment(null)} />
       <AnimatePresence>
@@ -354,7 +345,7 @@ export default function Demo() {
         )}
       </AnimatePresence>
       <AnimatePresence>
-        {phase === "chat" && !busy && !voice.active && !conversation && !attachment && !preparing && voice.state !== "error" && msgs.length > 0 && (
+        {phase === "chat" && !busy && !voice.active && !attachment && !preparing && voice.state !== "error" && msgs.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -377,14 +368,13 @@ export default function Demo() {
         draft={draft}
         setDraft={(v) => {
           setDraft(v);
-          if (v && conversationRef.current) endConversation();
         }}
-        disabled={busy || voice.active}
+        disabled={busy}
         canSendEmpty={!!attachment && !preparing}
         onSend={send}
         inputRef={inputRef}
-        placeholder={voice.active ? "Kuuntelen…" : busy ? "Lumi miettii…" : attachment ? "Kysy kuvasta…" : placeholder}
-        attach={<AttachButtons disabled={busy || voice.active || preparing} onFile={addImage} />}
+        placeholder={busy ? "Lumi miettii…" : attachment ? "Kysy kuvasta…" : voice.active ? "Puhu tai kirjoita…" : placeholder}
+        attach={<AttachButtons disabled={busy || preparing} onFile={addImage} />}
         mic={micButton()}
       />
     </div>
@@ -424,7 +414,21 @@ export default function Demo() {
                 <ChatHeader
                   mood={mood}
                   burst={burst}
-                  status={voice.active ? "kuuntelee sinua" : waiting ? "miettii…" : busy ? "kirjoittaa…" : lumiSpeaking ? "puhuu…" : voice.supported ? "mikki pois" : "odottaa viestiäsi"}
+                  status={
+                    waiting
+                      ? "miettii…"
+                      : busy
+                        ? "kirjoittaa…"
+                        : lumiSpeaking
+                          ? "puhuu…"
+                          : voice.state === "hearing"
+                            ? "kuulee sinut"
+                            : voice.active
+                              ? "kuuntelee rauhassa"
+                              : voice.supported
+                                ? "mikki pois"
+                                : "odottaa viestiäsi"
+                  }
                   phase={meta?.phase}
                   speaking={lumiSpeaking}
                   toggle={toggle}
@@ -444,7 +448,7 @@ export default function Demo() {
                         onRetry={retry}
                         canSpeak={speech.supported}
                         speaking={speech.speakingId === m.id}
-                        onSpeak={() => (speech.speakingId === m.id ? speech.stop() : speech.speak(m.id, m.text))}
+                        onSpeak={() => speakMessage(m)}
                       />
                     ),
                   )}
