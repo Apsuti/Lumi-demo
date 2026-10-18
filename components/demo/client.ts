@@ -1,6 +1,6 @@
 import type { LumiMeta } from "@/lib/lumi/meta";
 
-export type ApiTurn = { role: "user" | "assistant"; content: string };
+export type ApiTurn = { role: "user" | "assistant"; content: string; images?: { mediaType: string; data: string }[] };
 
 type Handlers = {
   onMeta: (m: LumiMeta) => void;

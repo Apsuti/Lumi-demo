@@ -17,20 +17,44 @@ export function hasCredentials() {
 export const MAX_MESSAGE_CHARS = 1200;
 const MAX_TURNS = 40;
 
-export type ChatTurn = { role: "user" | "assistant"; content: string };
+export type ChatTurn = Anthropic.MessageParam;
 
-/** Accepts only a well-formed, bounded conversation that starts and ends with the child. */
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
+type ImageType = (typeof IMAGE_TYPES)[number];
+const MAX_IMAGES = 2;
+const MAX_IMAGE_B64 = 2_500_000; // ≈1.8 MB; the client sends ~0.3–0.8 MB JPEGs
+
+/**
+ * Accepts only a well-formed, bounded conversation that starts and ends with the child.
+ * Wire format: { role, content: string, images?: { mediaType, data }[] } – images only on child turns.
+ */
 export function parseHistory(body: unknown): ChatTurn[] | null {
   const msgs = (body as { messages?: unknown })?.messages;
   if (!Array.isArray(msgs) || msgs.length === 0) return null;
   const turns: ChatTurn[] = [];
+  let imageCount = 0;
   for (const m of msgs.slice(-MAX_TURNS)) {
-    const role = (m as ChatTurn)?.role;
-    const content = (m as ChatTurn)?.content;
+    const { role, content, images } = (m ?? {}) as { role?: unknown; content?: unknown; images?: unknown };
     if ((role !== "user" && role !== "assistant") || typeof content !== "string") return null;
     const text = content.trim().slice(0, role === "user" ? MAX_MESSAGE_CHARS : 4000);
-    if (!text) continue;
-    turns.push({ role, content: text });
+
+    const blocks: Anthropic.ImageBlockParam[] = [];
+    if (images !== undefined) {
+      if (role !== "user" || !Array.isArray(images)) return null;
+      for (const img of images) {
+        const { mediaType, data } = (img ?? {}) as { mediaType?: unknown; data?: unknown };
+        if (!IMAGE_TYPES.includes(mediaType as ImageType) || typeof data !== "string") return null;
+        if (data.length > MAX_IMAGE_B64 || !/^[A-Za-z0-9+/=]+$/.test(data)) return null;
+        if (++imageCount > MAX_IMAGES) return null;
+        blocks.push({ type: "image", source: { type: "base64", media_type: mediaType as ImageType, data } });
+      }
+    }
+
+    if (blocks.length) {
+      turns.push({ role: "user", content: [...blocks, { type: "text", text: text || "(Lapsi lähetti kuvan.)" }] });
+    } else if (text) {
+      turns.push({ role, content: text });
+    }
   }
   while (turns.length && turns[0].role !== "user") turns.shift();
   if (!turns.length || turns[turns.length - 1].role !== "user") return null;

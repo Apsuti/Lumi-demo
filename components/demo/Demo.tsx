@@ -9,6 +9,8 @@ import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
 import { useVoiceInput } from "./useVoiceInput";
 import { MicButton, VoicePanel } from "./Voice";
+import { prepareImage, type PreparedImage } from "./image";
+import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
 
 type ChatMsg = {
   id: number;
@@ -16,7 +18,11 @@ type ChatMsg = {
   text: string;
   meta?: LumiMeta;
   status?: "streaming" | "done" | "error";
+  image?: PreparedImage;
 };
+
+/** Older pictures are dropped from the request to keep it small; the model remembers them from its own replies. */
+const IMAGES_IN_HISTORY = 2;
 
 const WELCOME = [
   "En ole täällä tekemässä tehtäviä puolestasi.",
@@ -43,13 +49,17 @@ const nextId = () => ++seq;
 
 /** Rebuilds what the model actually said (status line + reply) so the conversation stays consistent. */
 function toApiHistory(msgs: ChatMsg[]): ApiTurn[] {
+  const withImages = msgs.filter((m) => m.image).slice(-IMAGES_IN_HISTORY);
   return msgs
     .filter((m) => m.role === "user" || (m.status === "done" && m.text))
-    .map((m) =>
-      m.role === "user"
-        ? { role: "user", content: m.text }
-        : { role: "assistant", content: m.meta ? `<lumi>${JSON.stringify(m.meta)}</lumi>\n${m.text}` : m.text },
-    );
+    .map((m): ApiTurn => {
+      if (m.role === "lumi") {
+        return { role: "assistant", content: m.meta ? `<lumi>${JSON.stringify(m.meta)}</lumi>\n${m.text}` : m.text };
+      }
+      if (!m.image) return { role: "user", content: m.text };
+      if (withImages.includes(m)) return { role: "user", content: m.text, images: [{ mediaType: m.image.mediaType, data: m.image.data }] };
+      return { role: "user", content: `(Aiemmin lähettämäni kuva.) ${m.text}`.trim() };
+    });
 }
 
 export default function Demo() {
@@ -65,6 +75,11 @@ export default function Demo() {
   const [conversation, setConversationState] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [attachment, setAttachment] = useState<PreparedImage | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
 
   const speech = useSpeech();
   const speechRef = useRef(speech);
@@ -180,14 +195,72 @@ export default function Demo() {
 
   const send = (raw: string, viaVoice = false) => {
     const text = raw.trim();
-    if (!text || busy) return;
+    const image = attachment ?? undefined;
+    if ((!text && !image) || busy || preparing) return;
     if (!viaVoice) voice.cancel();
     setConversation(viaVoice);
     speech.stop();
     setDraft("");
+    setAttachment(null);
+    setImageError(null);
     if (phase !== "chat") setPhase("chat");
     const base = msgsRef.current.filter((m) => m.status !== "error");
-    ask([...base, { id: nextId(), role: "user", text }]);
+    ask([...base, { id: nextId(), role: "user", text, image }]);
+  };
+
+  /** Camera, file picker, drag & drop and paste all end up here. */
+  const addImage = async (file: Blob) => {
+    if (busy) return;
+    setImageError(null);
+    setPreparing(true);
+    try {
+      setAttachment(await prepareImage(file));
+      if (window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus({ preventScroll: true });
+    } catch {
+      setImageError("Kuvaa ei voitu avata. Kokeile toista kuvaa (esim. JPG tai PNG).");
+    } finally {
+      setPreparing(false);
+    }
+  };
+  const addImageRef = useRef(addImage);
+  addImageRef.current = addImage;
+
+  // Paste a picture straight from the clipboard.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith("image/"));
+      if (file) {
+        e.preventDefault();
+        addImageRef.current(file);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
+  const hasFiles = (e: React.DragEvent) => [...e.dataTransfer.types].includes("Files");
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current++;
+      setDragging(true);
+    },
+    onDragOver: (e: React.DragEvent) => hasFiles(e) && e.preventDefault(),
+    onDragLeave: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (!dragDepth.current) setDragging(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragging(false);
+      const file = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/"));
+      if (file) addImage(file);
+      else setImageError("Raahaa tähän kuva, esimerkiksi valokuva tehtävästä.");
+    },
   };
 
   sendRef.current = send;
@@ -218,6 +291,8 @@ export default function Demo() {
     setBusy(false);
     setWaiting(false);
     setDraft("");
+    setAttachment(null);
+    setImageError(null);
     setConversation(false);
     setMood("curious");
     setSheet(false);
@@ -255,8 +330,25 @@ export default function Demo() {
         onInterrupt={listen}
         onEndConversation={endConversation}
       />
+      <AttachmentPreview src={attachment?.dataUrl ?? null} busy={preparing} onRemove={() => setAttachment(null)} />
       <AnimatePresence>
-        {phase === "chat" && !busy && !voice.active && !conversation && voice.state !== "error" && msgs.length > 0 && (
+        {imageError && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="mx-4 mt-3 flex items-center gap-3 rounded-2xl bg-peach-100/80 px-4 py-2.5 text-sm font-semibold text-ink sm:mx-6"
+            role="alert"
+          >
+            <span className="flex-1">{imageError}</span>
+            <button onClick={() => setImageError(null)} className="grid h-7 w-7 place-items-center rounded-full bg-white ring-1 ring-ink/10" aria-label="Sulje">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {phase === "chat" && !busy && !voice.active && !conversation && !attachment && !preparing && voice.state !== "error" && msgs.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -282,9 +374,11 @@ export default function Demo() {
           if (v && conversationRef.current) endConversation();
         }}
         disabled={busy || voice.active}
+        canSendEmpty={!!attachment && !preparing}
         onSend={send}
         inputRef={inputRef}
-        placeholder={voice.active ? "Kuuntelen…" : busy ? "Lumi miettii…" : placeholder}
+        placeholder={voice.active ? "Kuuntelen…" : busy ? "Lumi miettii…" : attachment ? "Kysy kuvasta…" : placeholder}
+        attach={<AttachButtons disabled={busy || voice.active || preparing} onFile={addImage} />}
         mic={micButton()}
       />
     </div>
@@ -293,7 +387,8 @@ export default function Demo() {
   return (
     <div className="relative overflow-hidden rounded-[2rem] border border-white/70 bg-white/80 shadow-[0_40px_120px_-40px_rgba(91,135,245,0.45)] ring-1 ring-ink/[0.05] backdrop-blur-xl sm:rounded-[2.5rem]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_10%_0%,rgba(204,221,255,0.55),transparent),radial-gradient(50%_50%_at_100%_100%,rgba(221,210,255,0.55),transparent)]" />
-      <div className="relative h-[calc(100svh-4.5rem)] max-h-[900px] min-h-[540px] sm:h-[calc(100svh-6rem)]">
+      <div className="relative h-[calc(100svh-4.5rem)] max-h-[900px] min-h-[540px] sm:h-[calc(100svh-6rem)]" {...(phase !== "welcome" ? dropHandlers : {})}>
+        <DropOverlay show={dragging} />
         <AnimatePresence mode="wait">
           {phase === "welcome" && (
             <Welcome
@@ -313,7 +408,7 @@ export default function Demo() {
                 <div className="absolute right-4 top-4 sm:right-6 sm:top-6">{toggle}</div>
                 <Start configured={configured} mood={voice.active ? "curious" : mood} mic={voice.active ? null : micButton(true)} onPick={(p) => send(p)} />
               </div>
-              {composer("Kirjoita tai paina mikkiä…")}
+              {composer("Kirjoita viesti…")}
             </motion.div>
           )}
 
@@ -334,7 +429,7 @@ export default function Demo() {
                 <div ref={scrollRef} className="no-scrollbar flex-1 space-y-3 overflow-y-auto px-4 pb-4 pt-4 sm:px-6">
                   {msgs.map((m) =>
                     m.role === "user" ? (
-                      <UserBubble key={m.id} text={m.text} />
+                      <UserBubble key={m.id} text={m.text} image={m.image?.dataUrl} />
                     ) : (
                       <LumiBubble
                         key={m.id}
@@ -349,7 +444,7 @@ export default function Demo() {
                   )}
                 </div>
 
-                {composer("Kirjoita tai paina mikkiä…")}
+                {composer("Kirjoita viesti…")}
               </div>
 
               <aside className="hidden min-h-0 flex-col gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
@@ -440,7 +535,7 @@ function Start({
       <div className="flex flex-col items-center text-center">
         <LumiCharacter size={84} mood={mood === "idle" ? "curious" : mood} />
         <h2 className="mt-5 font-display text-2xl font-extrabold tracking-tight sm:text-3xl">Mitä tutkitaan tänään?</h2>
-        <p className="mt-2 text-ink-soft">{mic ? "Paina mikkiä ja kerro, mitä mietit. Voit myös kirjoittaa." : "Kirjoita oma kysymys – tai valitse joku näistä."}</p>
+        <p className="mt-2 text-ink-soft">{mic ? "Paina mikkiä ja kerro, mitä mietit. Voit myös kirjoittaa tai ottaa kuvan tehtävästä 📷" : "Kirjoita oma kysymys tai ota kuva tehtävästä 📷 – tai valitse joku näistä."}</p>
         {mic && (
           <div className="mt-6 flex flex-col items-center gap-2">
             {mic}
@@ -570,12 +665,19 @@ const bubbleMotion = {
   transition: { type: "spring" as const, stiffness: 260, damping: 24 },
 };
 
-function UserBubble({ text }: { text: string }) {
+function UserBubble({ text, image }: { text: string; image?: string }) {
   return (
-    <motion.div {...bubbleMotion} className="flex justify-end">
-      <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-[1.4rem] rounded-br-md bg-gradient-to-br from-sky-500 to-sky-600 px-4 py-2.5 text-[15px] font-medium leading-relaxed text-white shadow-soft">
-        {text}
-      </div>
+    <motion.div {...bubbleMotion} className="flex flex-col items-end gap-1.5">
+      {image && (
+        <a href={image} target="_blank" rel="noreferrer" className="block max-w-[70%] overflow-hidden rounded-[1.4rem] rounded-br-md shadow-soft ring-1 ring-ink/10 sm:max-w-[55%]">
+          <img src={image} alt="Lähettämäsi kuva" className="max-h-72 w-full object-cover" />
+        </a>
+      )}
+      {text && (
+        <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-[1.4rem] rounded-br-md bg-gradient-to-br from-sky-500 to-sky-600 px-4 py-2.5 text-[15px] font-medium leading-relaxed text-white shadow-soft">
+          {text}
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -681,20 +783,24 @@ function Composer({
   draft,
   setDraft,
   disabled,
+  canSendEmpty,
   onSend,
   inputRef,
   placeholder,
+  attach,
   mic,
 }: {
   draft: string;
   setDraft: (v: string) => void;
   disabled: boolean;
+  canSendEmpty: boolean;
   onSend: (v: string) => void;
   inputRef: React.RefObject<HTMLInputElement>;
   placeholder: string;
+  attach: React.ReactNode;
   mic: React.ReactNode;
 }) {
-  const canSend = !disabled && !!draft.trim();
+  const canSend = !disabled && (!!draft.trim() || canSendEmpty);
   return (
     <div className="px-4 pb-4 pt-3 sm:px-6">
       <form
@@ -702,8 +808,9 @@ function Composer({
           e.preventDefault();
           onSend(draft);
         }}
-        className="flex items-center gap-2"
+        className="flex items-center gap-1.5 sm:gap-2"
       >
+        {attach}
         <div
           className={`flex min-w-0 flex-1 items-center rounded-full border bg-white py-1.5 pl-5 pr-1.5 transition ${
             disabled ? "border-ink/10" : "border-lilac-300 shadow-[0_0_0_4px_rgba(196,179,255,0.25)]"
