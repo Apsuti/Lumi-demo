@@ -31,6 +31,7 @@ Selain ──POST /api/lumi { messages }──▶ Next.js-reitti ──stream─
 - **Kieltäytymiset** – pyynnöissä on `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`). Jos koko ketju kieltäytyy, Lumi ohjaa lempeästi muuhun aiheeseen.
 - **Suojaukset** – viestien pituus- ja määrärajat, IP-kohtainen rajoitin (`LUMI_RATE_LIMIT`), API-avain vain palvelimella.
 
+- **Mikrofonin diagnostiikka** – `components/demo/micDiagnostics.ts`. Ennen kuuntelua tarkistetaan (ilman lupakyselyä) https, Web Speech API -tuki ja sovellusten sisäiset selaimet. Virhetilanteessa syy selvitetään tarkasti mikrofoniluvan tilasta (`navigator.permissions`) ja mikrofonitestistä (`getUserMedia`), ja käyttäjälle näytetään syy, selitys ja laitekohtaiset korjausohjeet (iPhone/Safari, iPhone/Chrome, Android/Chrome, Samsung Internet, tietokone): lupa estetty, selain estää puheentunnistuksen, iPhonen Sanelu pois päältä, mikrofoni toisen sovelluksen käytössä, mikrofonia ei löydy, tunnistus ei käynnisty (7 s), ei yhteyttä puhepalveluun (3 peräkkäistä verkkovirhettä), suomea ei tueta, selain ei tue puheentunnistusta. ”Tarkista mikrofoni” näyttää koko tarkistuslistan. Mikkipainike näkyy aina, jotta tukemattomassakin selaimessa painallus kertoo syyn.
 - **Lumin ääni (ElevenLabs)** – Lumi puhuu **aina Petteri-äänellä** (`uBwJeWtV6tQa8ixtM7ZQ`, `lib/lumi/tts.ts`), oletusmallina nopein `eleven_flash_v2_5` (suomi, `language_code: fi`). Asetukset on viritetty lämpimäksi ja rauhalliseksi (stability 0,5, style 0,15, nopeus 0,93). Jos ElevenLabs-avainta ei ole tai pyyntö epäonnistuu, Lumi puhuu laitteen omalla äänellä, joten puhe ei katkea.
 - **Nopea puheputki** – Lumi alkaa puhua jo ennen kuin vastaus on kirjoitettu loppuun:
   1. *Puheentunnistus*: lausuma lähetetään 0,7 s valmiin lauseen jälkeen (1,5 s kesken lauseen); ”Lumi miettii…” näkyy heti.
@@ -63,6 +64,7 @@ Asetukset (`.env.local`): `ANTHROPIC_API_KEY`, `LUMI_MODEL`, `LUMI_EFFORT` (`low
 | `components/demo/client.ts` | SSE-lukija selaimeen |
 | `components/demo/useSpeech.ts`, `app/api/tts/route.ts`, `lib/lumi/tts.ts` | Lumin ääni: ElevenLabs + laitteen ääni varalla |
 | `components/demo/useVoiceSession.ts`, `Voice.tsx` | Jatkuva puhekeskustelu ja sen tilanäkymä |
+| `components/demo/micDiagnostics.ts` | Mikrofonin ja puheentunnistuksen diagnostiikka |
 | `components/demo/image.ts`, `ImageAttach.tsx` | Kuvan valmistelu, kamera, tiedosto, raahaus |
 | `components/LumiCharacter.tsx` | Lumi-hahmo (SVG + Framer Motion) |
 

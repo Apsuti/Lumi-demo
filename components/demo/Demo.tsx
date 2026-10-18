@@ -331,9 +331,8 @@ export default function Demo() {
   );
 
   const micButton = (big?: boolean) =>
-    voice.supported ? (
-      <MicButton voice={voice} big={big} disabled={busy} onStart={startVoice} onEnd={endVoice} />
-    ) : null;
+    // Always shown: on a browser without speech recognition, a tap explains exactly why.
+    <MicButton voice={voice} big={big} disabled={busy} onStart={startVoice} onEnd={endVoice} />;
 
   const composer = (placeholder: string) => (
     <div className="border-t border-ink/[0.06] bg-white/85 backdrop-blur">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { diagnoseRecognitionError, detectPlatform, makeIssue, preflight, type MicIssue } from "./micDiagnostics";
 
 /**
  * Continuous, patient voice conversation on top of the Web Speech API.
@@ -44,12 +45,10 @@ const END_AFTER_INTERIM_MS = 1500;
 const RESUME_DELAY_MS = 450; // let the speaker's echo die away before listening again
 const IDLE_SLEEP_MS = 3 * 60 * 1000; // after 3 quiet minutes the session rests (privacy, battery)
 
-const FATAL: Record<string, string> = {
-  "not-allowed": "Mikrofonin käyttö on estetty. Salli mikrofoni selaimen osoiterivin lukkokuvakkeesta ja aloita uudelleen.",
-  "service-not-allowed": "Mikrofonin käyttö on estetty. Salli mikrofoni selaimen asetuksista ja aloita uudelleen.",
-  "audio-capture": "Mikrofonia ei löytynyt. Onko laitteessa mikrofoni päällä?",
-  "language-not-supported": "Tämä selain ei osaa tunnistaa suomea. Kokeile Chromea tai Safaria.",
-};
+/** Recognition errors that end the session; the exact cause is diagnosed before it is shown. */
+const FATAL = new Set(["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"]);
+const START_TIMEOUT_MS = 7000; // recognition asked to start but never did
+const MAX_NETWORK_ERRORS = 3; // consecutive speech-service failures before giving up
 
 function getRecognition(): (new () => Rec) | null {
   if (typeof window === "undefined") return null;
@@ -65,7 +64,8 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   const [state, setState] = useState<SessionState>("off");
   const [transcript, setTranscript] = useState("");
   const [level, setLevel] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  /** Exact reason the microphone or speech recognition is not working, with fix steps. */
+  const [issue, setIssue] = useState<MicIssue | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const activeRef = useRef(false);
@@ -76,6 +76,10 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restarts = useRef<number[]>([]);
+  const startTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const networkErrors = useRef(0);
+  /** True until the first recogniser of this session has actually started. */
+  const firstStartRef = useRef(false);
   const meterRef = useRef<{ stream: MediaStream; ctx: AudioContext; raf: number } | null>(null);
   const onUtteranceRef = useRef(onUtterance);
   onUtteranceRef.current = onUtterance;
@@ -153,6 +157,26 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Ends the session and shows exactly what went wrong. */
+  const fail = useCallback(
+    (found: MicIssue) => {
+      activeRef.current = false;
+      pausedRef.current = false;
+      killRec();
+      stopMeter();
+      clear(idleTimer);
+      clear(resumeTimer);
+      clear(startTimer);
+      textRef.current = "";
+      setTranscript("");
+      setIssue(found);
+      setState("error");
+      console.warn("[Lumi mikki]", found.code, found.technical ?? "");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stopMeter],
+  );
+
   const listen = useCallback(() => {
     const SR = getRecognition();
     if (!SR || !activeRef.current || pausedRef.current || recRef.current) return;
@@ -188,8 +212,16 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       onUtteranceRef.current(text);
     };
 
+    // If the browser accepts start() but never actually starts listening, say so.
+    clear(startTimer);
+    startTimer.current = setTimeout(() => {
+      if (recRef.current === rec && activeRef.current) fail(makeIssue("start_timeout", detectPlatform(), "onstart puuttui 7 s"));
+    }, START_TIMEOUT_MS);
+
     rec.onstart = () => {
       if (recRef.current !== rec) return;
+      clear(startTimer);
+      firstStartRef.current = false;
       setState((s) => (s === "hearing" ? s : "listening"));
     };
     rec.onspeechstart = () => recRef.current === rec && setState("hearing");
@@ -199,6 +231,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       for (let i = 0; i < e.results.length; i++) text += ` ${e.results[i][0].transcript}`;
       text = text.replace(/\s+/g, " ").trim();
       if (!text) return;
+      networkErrors.current = 0;
       textRef.current = text;
       setTranscript(text);
       setState("hearing");
@@ -208,15 +241,18 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     };
     rec.onerror = (e) => {
       if (recRef.current !== rec) return;
-      if (FATAL[e.error]) {
+      if (FATAL.has(e.error)) {
+        // Stop at once; work out the precise cause (permission, browser block, busy mic…) meanwhile.
         activeRef.current = false;
         killRec();
-        stopMeter();
-        clear(idleTimer);
-        setError(FATAL[e.error]);
-        setState("error");
+        setState("starting");
+        diagnoseRecognitionError(e.error).then(fail);
+        return;
       }
-      // no-speech, network, aborted: onend restarts quietly.
+      if (e.error === "network" && ++networkErrors.current >= MAX_NETWORK_ERRORS) {
+        fail(makeIssue("network", detectPlatform(), "SpeechRecognition: network"));
+      }
+      // no-speech, a single network hiccup, aborted: onend restarts quietly.
     };
     rec.onend = () => {
       if (recRef.current !== rec) return;
@@ -228,25 +264,33 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
 
     try {
       rec.start();
-    } catch {
+    } catch (err) {
       recRef.current = null;
+      clear(startTimer);
+      // Failing on the very first start means recognition cannot run here at all.
+      if (firstStartRef.current) return fail(makeIssue("start_timeout", detectPlatform(), `start(): ${(err as Error)?.name ?? err}`));
       resumeTimer.current = setTimeout(listen, 800);
     }
-  }, [armIdle, stopMeter]);
+  }, [armIdle, fail]);
 
   /** The child presses the mic once to start talking with Lumi. */
   const start = useCallback(() => {
-    if (!getRecognition() || activeRef.current) return;
+    if (activeRef.current) return;
+    // HTTPS, Web Speech API, in-app browsers: known before any permission prompt.
+    const blocker = preflight();
+    if (blocker) return fail(blocker);
     activeRef.current = true;
     pausedRef.current = false;
     restarts.current = [];
-    setError(null);
+    networkErrors.current = 0;
+    firstStartRef.current = true;
+    setIssue(null);
     setNotice(null);
     setState("starting");
     armIdle();
     startMeter();
     listen();
-  }, [armIdle, listen, startMeter]);
+  }, [armIdle, fail, listen, startMeter]);
 
   /** Lumi is thinking or speaking: stop recognising so she never hears herself. */
   const pause = useCallback(() => {
@@ -302,7 +346,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   }, [stopMeter]);
 
   const dismiss = useCallback(() => {
-    setError(null);
+    setIssue(null);
     setNotice(null);
     setState((s) => (s === "error" ? "off" : s));
   }, []);
@@ -326,7 +370,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     active: state !== "off" && state !== "error",
     transcript,
     level,
-    error,
+    issue,
     notice,
     start,
     pause,

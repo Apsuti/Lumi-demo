@@ -1,8 +1,9 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Mic, MicOff, Pause, RotateCcw, SendHorizontal, Volume2, X } from "lucide-react";
+import { Check, CircleHelp, Loader2, Mic, MicOff, Pause, RotateCcw, SendHorizontal, Stethoscope, Volume2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { runChecks, type Check as MicCheck, type MicIssue } from "./micDiagnostics";
 import type { SessionState } from "./useVoiceSession";
 
 type Voice = {
@@ -10,7 +11,7 @@ type Voice = {
   active: boolean;
   transcript: string;
   level: number;
-  error: string | null;
+  issue: MicIssue | null;
   notice: string | null;
 };
 
@@ -76,24 +77,9 @@ export function VoicePanel({ voice, lumi, onStopSpeaking, onSendNow, onEnd, onRe
   let content: React.ReactNode = null;
   let key = "none";
 
-  if (voice.state === "error" && voice.error) {
+  if (voice.state === "error" && voice.issue) {
     key = "error";
-    content = (
-      <div className="flex items-start gap-3 rounded-3xl border border-peach-400/40 bg-peach-100/80 p-4" role="alert">
-        <MicOff className="mt-0.5 h-5 w-5 shrink-0 text-[#C0643A]" />
-        <div className="min-w-0 flex-1">
-          <p className="text-[15px] font-semibold text-ink">{voice.error}</p>
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            <button onClick={onRestart} className="inline-flex items-center gap-1.5 rounded-full bg-lilac-500 px-4 py-2 text-sm font-bold text-white">
-              <RotateCcw className="h-3.5 w-3.5" /> Aloita uudelleen
-            </button>
-            <button onClick={onDismiss} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-ink-soft ring-1 ring-ink/10">
-              Kirjoitan mieluummin
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    content = <IssuePanel issue={voice.issue} onRestart={onRestart} onDismiss={onDismiss} />;
   } else if (!voice.active && voice.notice) {
     key = "notice";
     content = (
@@ -201,5 +187,65 @@ function BreathingDot({ hearing, level }: { hearing: boolean; level: number }) {
       />
       <span className="relative h-2.5 w-2.5 rounded-full bg-mint-600" />
     </span>
+  );
+}
+
+/** Exact cause, how to fix it on this device, and an on-demand full check. */
+function IssuePanel({ issue, onRestart, onDismiss }: { issue: MicIssue; onRestart: () => void; onDismiss: () => void }) {
+  const [checks, setChecks] = useState<MicCheck[] | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const check = async () => {
+    setChecking(true);
+    setChecks(await runChecks());
+    setChecking(false);
+  };
+
+  return (
+    <div className="max-h-[55svh] overflow-y-auto rounded-3xl border border-peach-400/40 bg-peach-100/80 p-4" role="alert">
+      <div className="flex items-start gap-3">
+        <MicOff className="mt-0.5 h-5 w-5 shrink-0 text-[#C0643A]" />
+        <div className="min-w-0 flex-1">
+          <p className="font-display text-[15px] font-extrabold text-ink">{issue.title}</p>
+          <p className="mt-0.5 text-sm text-ink-soft">{issue.detail}</p>
+          <ol className="mt-2.5 list-decimal space-y-1 pl-5 text-sm text-ink">
+            {issue.steps.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+          {issue.technical && <p className="mt-2 font-mono text-[10px] text-ink-mute">Virhekoodi: {issue.technical}</p>}
+        </div>
+      </div>
+
+      {checks && (
+        <ul className="mt-3 space-y-1 rounded-2xl bg-white/80 p-3 text-xs">
+          {checks.map((c) => (
+            <li key={c.label} className="flex items-start gap-2">
+              <span
+                className={`mt-px grid h-4 w-4 shrink-0 place-items-center rounded-full text-white ${
+                  c.ok === true ? "bg-mint-400" : c.ok === false ? "bg-[#E07A4F]" : "bg-ink-mute/50"
+                }`}
+              >
+                {c.ok === true ? <Check className="h-2.5 w-2.5" strokeWidth={4} /> : c.ok === false ? <X className="h-2.5 w-2.5" strokeWidth={4} /> : <CircleHelp className="h-2.5 w-2.5" />}
+              </span>
+              <span className="font-semibold text-ink">{c.label}:</span>
+              <span className="text-ink-soft">{c.value}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button onClick={onRestart} className="inline-flex items-center gap-1.5 rounded-full bg-lilac-500 px-4 py-2 text-sm font-bold text-white">
+          <RotateCcw className="h-3.5 w-3.5" /> Yritä uudelleen
+        </button>
+        <button onClick={check} className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-bold text-ink-soft ring-1 ring-ink/10">
+          {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="h-3.5 w-3.5" />} Tarkista mikrofoni
+        </button>
+        <button onClick={onDismiss} className="rounded-full px-3 py-2 text-sm font-bold text-ink-mute">
+          Kirjoitan mieluummin
+        </button>
+      </div>
+    </div>
   );
 }
