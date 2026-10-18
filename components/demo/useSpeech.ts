@@ -63,15 +63,41 @@ export function useSpeech() {
     setSpeakingId(null);
   }, []);
 
+  /** Reads text aloud. `onDone` fires when it finishes on its own – not when stopped. */
   const speak = useCallback(
-    (id: number, text: string) => {
-      if (!supported) return;
+    (id: number, text: string, onDone?: () => void) => {
+      if (!supported) {
+        onDone?.();
+        return;
+      }
       const synth = window.speechSynthesis;
       synth.cancel();
       const run = ++runRef.current;
       const parts = splitSentences(cleanForSpeech(text));
-      if (!parts.length) return;
+      if (!parts.length) {
+        onDone?.();
+        return;
+      }
       setSpeakingId(id);
+
+      let finished = false;
+      let watchdog: ReturnType<typeof setInterval> | undefined;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        clearInterval(watchdog);
+        if (run !== runRef.current) return;
+        setSpeakingId(null);
+        onDone?.();
+      };
+      // Some browsers occasionally drop the final `end` event; notice silence instead.
+      setTimeout(() => {
+        if (finished) return;
+        watchdog = setInterval(() => {
+          if (run !== runRef.current) return clearInterval(watchdog);
+          if (!synth.speaking && !synth.pending) done();
+        }, 600);
+      }, 1200);
 
       parts.forEach((part, i) => {
         const u = new SpeechSynthesisUtterance(part);
@@ -80,7 +106,6 @@ export function useSpeech() {
         u.rate = 0.95;
         u.pitch = 1.1;
         if (i === parts.length - 1) {
-          const done = () => run === runRef.current && setSpeakingId(null);
           u.onend = done;
           u.onerror = done;
         }

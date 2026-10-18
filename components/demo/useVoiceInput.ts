@@ -30,9 +30,13 @@ type Rec = {
   onspeechstart: (() => void) | null;
 };
 
-const SILENCE_MS = 2200; // stop after this long without new words
-const NOTHING_MS = 8000; // stop if nothing at all is heard
+// Children pause mid-sentence, so wait longer while words are still unsettled.
+const SILENCE_AFTER_FINAL_MS = 1500;
+const SILENCE_AFTER_INTERIM_MS = 2600;
+const NOTHING_MS = 9000; // stop if nothing at all is heard
 const MAX_MS = 30000;
+// Android Chrome repeats words in continuous mode; one utterance per turn is more reliable there.
+const isAndroid = () => /android/i.test(navigator.userAgent);
 
 const ERRORS: Record<string, string> = {
   "not-allowed": "Mikrofonin käyttö on estetty. Salli mikrofoni selaimen osoiterivin lukkokuvakkeesta ja kokeile uudelleen.",
@@ -128,9 +132,10 @@ export function useVoiceInput(onFinal: (text: string) => void) {
   const start = useCallback(() => {
     const SR = getRecognition();
     if (!SR || recRef.current) return;
+    if (meterRef.current) stopMeter();
     const rec = new SR();
     rec.lang = "fi-FI";
-    rec.continuous = true;
+    rec.continuous = !isAndroid();
     rec.interimResults = true;
     rec.maxAlternatives = 1;
     recRef.current = rec;
@@ -139,9 +144,9 @@ export function useVoiceInput(onFinal: (text: string) => void) {
     setError(null);
     setState("starting");
 
-    const armSilence = () => {
+    const armSilence = (settled: boolean) => {
       if (silenceRef.current) clearTimeout(silenceRef.current);
-      silenceRef.current = setTimeout(() => rec.stop(), SILENCE_MS);
+      silenceRef.current = setTimeout(() => rec.stop(), settled ? SILENCE_AFTER_FINAL_MS : SILENCE_AFTER_INTERIM_MS);
     };
 
     rec.onstart = () => {
@@ -156,12 +161,13 @@ export function useVoiceInput(onFinal: (text: string) => void) {
     rec.onspeechstart = () => setState((s) => (s === "listening" ? "hearing" : s));
     rec.onresult = (e) => {
       let text = "";
-      for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+      for (let i = 0; i < e.results.length; i++) text += ` ${e.results[i][0].transcript}`;
       text = text.replace(/\s+/g, " ").trim();
+      if (!text) return;
       textRef.current = text;
       setTranscript(text);
       setState("hearing");
-      armSilence();
+      armSilence(e.results[e.results.length - 1].isFinal);
     };
     rec.onerror = (e) => {
       if (e.error === "aborted") return;

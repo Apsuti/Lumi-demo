@@ -8,7 +8,7 @@ import { PHASES, type LumiMeta, type LumiPhase } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
 import { useVoiceInput } from "./useVoiceInput";
-import { HeardHint, MicButton, VoicePanel } from "./Voice";
+import { MicButton, VoicePanel } from "./Voice";
 
 type ChatMsg = {
   id: number;
@@ -62,7 +62,7 @@ export default function Demo() {
   const [meta, setMeta] = useState<LumiMeta | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
-  const [fromVoice, setFromVoice] = useState(false);
+  const [conversation, setConversationState] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
 
@@ -70,10 +70,21 @@ export default function Demo() {
   const speechRef = useRef(speech);
   speechRef.current = speech;
 
-  const voice = useVoiceInput((text) => {
-    setDraft((d) => (d.trim() ? `${d.trim()} ${text}` : text));
-    setFromVoice(true);
-  });
+  // Spoken messages go straight to Lumi – no extra send step.
+  const sendRef = useRef<(text: string, viaVoice?: boolean) => void>(() => {});
+  const voice = useVoiceInput((text) => sendRef.current(text, true));
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+
+  /** Hands-free dialog: once the child speaks, Lumi answers aloud and the mic reopens by itself. */
+  const conversationRef = useRef(false);
+  const setConversation = (on: boolean) => {
+    conversationRef.current = on;
+    setConversationState(on);
+  };
+  const resumeListening = () => {
+    if (conversationRef.current) setTimeout(() => conversationRef.current && voiceRef.current.start(), 250);
+  };
 
   const abortRef = useRef<AbortController | null>(null);
   const msgsRef = useRef(msgs);
@@ -104,6 +115,11 @@ export default function Demo() {
   useEffect(() => {
     if (voice.active) setMood("curious");
   }, [voice.active]);
+
+  // If the mic fails or hears nothing, leave hands-free mode instead of looping.
+  useEffect(() => {
+    if (voice.state === "error") setConversation(false);
+  }, [voice.state]);
 
   const patchMsg = (id: number, patch: Partial<ChatMsg> | ((m: ChatMsg) => Partial<ChatMsg>)) =>
     setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m)));
@@ -143,11 +159,13 @@ export default function Demo() {
           spoken ||= EMPTY_TEXT;
           patchMsg(lumiId, { status: "done", text: spoken });
         }
-        if (speechRef.current.autoSpeak) speechRef.current.speak(lumiId, spoken);
+        if (conversationRef.current) speechRef.current.speak(lumiId, spoken, resumeListening);
+        else if (speechRef.current.autoSpeak) speechRef.current.speak(lumiId, spoken);
       },
       onError: (message) => {
         patchMsg(lumiId, { text: message, status: "error" });
         setMood("curious");
+        setConversation(false);
       },
     });
 
@@ -156,30 +174,33 @@ export default function Demo() {
     setBusy(false);
     if (gotMeta?.celebrate) setTimeout(() => setMood("happy"), 2600);
     else if (gotMeta) setMood(gotMeta.mood === "think" ? "idle" : gotMeta.mood);
-    if (window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus({ preventScroll: true });
+    if (!conversationRef.current && window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const send = (raw: string) => {
+  const send = (raw: string, viaVoice = false) => {
     const text = raw.trim();
     if (!text || busy) return;
-    voice.cancel();
+    if (!viaVoice) voice.cancel();
+    setConversation(viaVoice);
     speech.stop();
     setDraft("");
-    setFromVoice(false);
     if (phase !== "chat") setPhase("chat");
     const base = msgsRef.current.filter((m) => m.status !== "error");
     ask([...base, { id: nextId(), role: "user", text }]);
   };
 
+  sendRef.current = send;
+
   const listen = () => {
     speech.stop(); // never let the mic hear Lumi's own voice
-    setFromVoice(false);
     voice.start();
   };
 
-  const redo = () => {
-    setDraft("");
-    listen();
+  const endConversation = () => {
+    setConversation(false);
+    speech.stop();
+    voice.cancel();
   };
 
   const retry = () => {
@@ -197,21 +218,45 @@ export default function Demo() {
     setBusy(false);
     setWaiting(false);
     setDraft("");
-    setFromVoice(false);
+    setConversation(false);
     setMood("curious");
     setSheet(false);
     setPhase("start");
   };
 
   const lumiSpeaking = speech.speakingId !== null;
-  const toggle = <SpeechToggle supported={speech.supported} on={speech.autoSpeak} onChange={speech.setAutoSpeak} />;
+  const toggle = (
+    <SpeechToggle
+      supported={speech.supported}
+      on={speech.autoSpeak || conversation}
+      onChange={(on) => {
+        if (!on && conversationRef.current) endConversation();
+        speech.setAutoSpeak(on);
+      }}
+    />
+  );
+
+  const micButton = (big?: boolean) =>
+    voice.supported ? <MicButton voice={voice} big={big} disabled={busy} onStart={listen} onStop={voice.stop} /> : null;
 
   const composer = (placeholder: string) => (
     <div className="border-t border-ink/[0.06] bg-white/85 backdrop-blur">
-      <VoicePanel voice={voice} onStop={voice.stop} onCancel={voice.cancel} onRetry={listen} onDismiss={voice.dismissError} />
-      <AnimatePresence>{fromVoice && draft && !voice.active && <HeardHint onRedo={redo} />}</AnimatePresence>
+      <VoicePanel
+        voice={voice}
+        conversation={conversation}
+        lumi={busy ? "thinking" : lumiSpeaking ? "speaking" : null}
+        onSendNow={voice.stop}
+        onCancel={endConversation}
+        onRetry={listen}
+        onDismiss={() => {
+          voice.dismissError();
+          setConversation(false);
+        }}
+        onInterrupt={listen}
+        onEndConversation={endConversation}
+      />
       <AnimatePresence>
-        {phase === "chat" && !busy && !voice.active && !fromVoice && voice.state !== "error" && msgs.length > 0 && (
+        {phase === "chat" && !busy && !voice.active && !conversation && voice.state !== "error" && msgs.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -234,14 +279,13 @@ export default function Demo() {
         draft={draft}
         setDraft={(v) => {
           setDraft(v);
-          if (!v) setFromVoice(false);
+          if (v && conversationRef.current) endConversation();
         }}
         disabled={busy || voice.active}
-        highlightSend={fromVoice}
         onSend={send}
         inputRef={inputRef}
         placeholder={voice.active ? "Kuuntelen…" : busy ? "Lumi miettii…" : placeholder}
-        mic={voice.supported ? <MicButton voice={voice} disabled={busy} onStart={listen} onStop={voice.stop} /> : null}
+        mic={micButton()}
       />
     </div>
   );
@@ -267,7 +311,7 @@ export default function Demo() {
             <motion.div key="start" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex h-full flex-col">
               <div className="no-scrollbar relative flex-1 overflow-y-auto px-5 py-8 sm:px-10 sm:py-10">
                 <div className="absolute right-4 top-4 sm:right-6 sm:top-6">{toggle}</div>
-                <Start configured={configured} mood={voice.active ? "curious" : mood} micSupported={voice.supported} onPick={send} />
+                <Start configured={configured} mood={voice.active ? "curious" : mood} mic={voice.active ? null : micButton(true)} onPick={(p) => send(p)} />
               </div>
               {composer("Kirjoita tai paina mikkiä…")}
             </motion.div>
@@ -383,12 +427,12 @@ function Welcome({ mood, burst, onStart }: { mood: LumiMood; burst: number; onSt
 function Start({
   configured,
   mood,
-  micSupported,
+  mic,
   onPick,
 }: {
   configured: boolean | null;
   mood: LumiMood;
-  micSupported: boolean;
+  mic: React.ReactNode;
   onPick: (p: string) => void;
 }) {
   return (
@@ -396,9 +440,13 @@ function Start({
       <div className="flex flex-col items-center text-center">
         <LumiCharacter size={84} mood={mood === "idle" ? "curious" : mood} />
         <h2 className="mt-5 font-display text-2xl font-extrabold tracking-tight sm:text-3xl">Mitä tutkitaan tänään?</h2>
-        <p className="mt-2 text-ink-soft">
-          {micSupported ? "Kirjoita, paina mikkiä ja puhu – tai valitse joku näistä." : "Kirjoita oma kysymys – tai valitse joku näistä."}
-        </p>
+        <p className="mt-2 text-ink-soft">{mic ? "Paina mikkiä ja kerro, mitä mietit. Voit myös kirjoittaa." : "Kirjoita oma kysymys – tai valitse joku näistä."}</p>
+        {mic && (
+          <div className="mt-6 flex flex-col items-center gap-2">
+            {mic}
+            <span className="text-sm font-bold text-lilac-600">Puhu Lumille</span>
+          </div>
+        )}
       </div>
 
       {configured === false && (
@@ -633,7 +681,6 @@ function Composer({
   draft,
   setDraft,
   disabled,
-  highlightSend,
   onSend,
   inputRef,
   placeholder,
@@ -642,7 +689,6 @@ function Composer({
   draft: string;
   setDraft: (v: string) => void;
   disabled: boolean;
-  highlightSend: boolean;
   onSend: (v: string) => void;
   inputRef: React.RefObject<HTMLInputElement>;
   placeholder: string;
@@ -673,16 +719,14 @@ function Composer({
             maxLength={1200}
             aria-label="Viestisi Lumille"
           />
-          <motion.button
+          <button
             type="submit"
             disabled={!canSend}
-            animate={highlightSend && canSend ? { scale: [1, 1.12, 1] } : { scale: 1 }}
-            transition={highlightSend ? { duration: 1.1, repeat: Infinity } : {}}
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-sky-500 to-lilac-500 text-white transition disabled:opacity-30"
             aria-label="Lähetä"
           >
             <SendHorizontal className="h-4 w-4" />
-          </motion.button>
+          </button>
         </div>
         {mic}
       </form>
