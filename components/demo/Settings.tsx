@@ -1,0 +1,138 @@
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import { Check, Play, Settings as Gear, Square, X } from "lucide-react";
+import { useState } from "react";
+import { createPortal } from "react-dom";
+import { SAMPLE_LINE } from "@/lib/lumi/voice";
+import type { useSpeech } from "./useSpeech";
+
+type Speech = ReturnType<typeof useSpeech>;
+const PREVIEW_ID = -1;
+
+export function SettingsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-ink-soft ring-1 ring-ink/10 transition hover:ring-lilac-300"
+      aria-label="Asetukset"
+      title="Asetukset"
+    >
+      <Gear className="h-4 w-4" />
+    </button>
+  );
+}
+
+export function SettingsDialog({ open, speech, onClose }: { open: boolean; speech: Speech; onClose: () => void }) {
+  // Which voice the current sample belongs to (one sample plays at a time).
+  const [previewVoice, setPreviewVoice] = useState<string | null>(null);
+  if (typeof document === "undefined") return null;
+  const close = () => {
+    if (speech.speakingId === PREVIEW_ID) speech.stop();
+    onClose();
+  };
+  const previewing = (id: string) => speech.speakingId === PREVIEW_ID && previewVoice === id;
+
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={close}
+        >
+          <motion.div
+            role="dialog"
+            aria-label="Asetukset"
+            className="flex max-h-[85svh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-lift sm:rounded-3xl"
+            initial={{ y: 30, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 30, opacity: 0 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 pb-2 pt-5">
+              <h2 className="font-display text-lg font-extrabold">Asetukset</h2>
+              <button onClick={close} className="grid h-9 w-9 place-items-center rounded-full bg-ink/5" aria-label="Sulje">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto px-5 pb-6">
+              <label className="mt-2 flex cursor-pointer items-center justify-between gap-3 rounded-2xl bg-sky-50/70 px-4 py-3">
+                <span>
+                  <span className="block text-sm font-bold text-ink">Lue vastaukset ääneen</span>
+                  <span className="block text-xs text-ink-mute">Puhekeskustelussa Lumi puhuu aina.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 accent-lilac-500"
+                  checked={speech.autoSpeak}
+                  onChange={(e) => speech.setAutoSpeak(e.target.checked)}
+                />
+              </label>
+
+              <h3 className="mt-5 text-[11px] font-bold uppercase tracking-wider text-ink-mute">Lumin ääni</h3>
+              {speech.engine !== "elevenlabs" ? (
+                <p className="mt-2 rounded-2xl bg-peach-100/70 px-4 py-3 text-sm text-ink-soft">
+                  Luonnollinen ääni ei ole käytössä, joten Lumi käyttää laitteen omaa puheääntä. Ota se käyttöön lisäämällä{" "}
+                  <code className="rounded bg-white/70 px-1">ELEVENLABS_API_KEY</code> palvelimen ympäristömuuttujiin.
+                </p>
+              ) : (
+                <ul className="mt-2 space-y-2">
+                  {speech.voices.map((v) => {
+                    const selected = v.id === speech.voiceId;
+                    return (
+                      <li key={v.id}>
+                        <div
+                          className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 ring-1 transition ${
+                            selected ? "bg-lilac-50 ring-lilac-300" : "bg-white ring-ink/[0.08] hover:ring-lilac-200"
+                          }`}
+                        >
+                          <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => speech.setVoiceId(v.id)} aria-pressed={selected}>
+                            <span
+                              className={`grid h-6 w-6 shrink-0 place-items-center rounded-full ${selected ? "bg-lilac-500 text-white" : "bg-ink/[0.05] text-transparent"}`}
+                            >
+                              <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                            </span>
+                            <span className="min-w-0">
+                              <span className="flex items-center gap-2 text-sm font-bold text-ink">
+                                {v.name}
+                                {v.finnish && <span className="rounded-full bg-mint-100 px-2 py-0.5 text-[10px] font-extrabold text-mint-600">Suomi</span>}
+                              </span>
+                              {v.description && <span className="block truncate text-xs text-ink-mute">{v.description}</span>}
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (previewing(v.id)) return speech.stop();
+                              setPreviewVoice(v.id);
+                              speech.speak(PREVIEW_ID, SAMPLE_LINE, undefined, v.id);
+                            }}
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-lilac-600 ring-1 ring-lilac-200"
+                            aria-label={`Kuuntele ääni ${v.name}`}
+                          >
+                            {previewing(v.id) ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3 fill-current" />}
+                            Kuuntele
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {speech.engine === "elevenlabs" && (
+                <p className="mt-3 text-xs leading-relaxed text-ink-mute">
+                  Vinkki: luonnollisimman suomen saa ElevenLabsin Voice Librarysta valitulla suomenkielisellä äänellä. Kun lisäät
+                  äänen ElevenLabs-tilillesi, se ilmestyy tähän listaan.
+                </p>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body,
+  );
+}

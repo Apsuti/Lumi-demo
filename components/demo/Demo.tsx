@@ -11,6 +11,7 @@ import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
 import { prepareImage, type PreparedImage } from "./image";
 import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
+import { SettingsButton, SettingsDialog } from "./Settings";
 
 type ChatMsg = {
   id: number;
@@ -78,6 +79,7 @@ export default function Demo() {
   const [preparing, setPreparing] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const dragDepth = useRef(0);
 
   const speech = useSpeech();
@@ -301,14 +303,22 @@ export default function Demo() {
 
   const lumiSpeaking = speech.speakingId !== null;
   const toggle = (
-    <SpeechToggle
-      supported={speech.supported}
-      on={speech.autoSpeak || voice.active}
-      onChange={(on) => {
-        if (!on && voice.active) endVoice();
-        speech.setAutoSpeak(on);
-      }}
-    />
+    <div className="flex shrink-0 items-center gap-1.5">
+      <SpeechToggle
+        supported={speech.supported}
+        on={speech.autoSpeak || voice.active}
+        onChange={(on) => {
+          if (!on && voice.active) endVoice();
+          speech.setAutoSpeak(on);
+        }}
+      />
+      <SettingsButton
+        onClick={() => {
+          voice.pause(); // voice samples must not be heard as the child's answer
+          setSettingsOpen(true);
+        }}
+      />
+    </div>
   );
 
   const micButton = (big?: boolean) =>
@@ -485,6 +495,14 @@ export default function Demo() {
           )}
         </AnimatePresence>
       </div>
+      <SettingsDialog
+        open={settingsOpen}
+        speech={speech}
+        onClose={() => {
+          setSettingsOpen(false);
+          voice.resume();
+        }}
+      />
     </div>
   );
 }
@@ -935,13 +953,14 @@ function SpeechToggle({ supported, on, onChange }: { supported: boolean; on: boo
       onClick={() => onChange(!on)}
       role="switch"
       aria-checked={on}
+      aria-label="Puhe"
       title={on ? "Lumi lukee vastaukset ääneen" : "Lumi ei lue vastauksia automaattisesti"}
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold transition ${
         on ? "bg-lilac-500 text-white shadow-glow" : "bg-white text-ink-soft ring-1 ring-ink/10 hover:ring-lilac-300"
       }`}
     >
       {on ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
-      <span>Puhe {on ? "päällä" : "pois"}</span>
+      <span className="hidden sm:inline">Puhe {on ? "päällä" : "pois"}</span>
     </button>
   );
 }
