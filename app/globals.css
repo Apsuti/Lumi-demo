@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  @apply bg-white text-ink antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+
+::selection {
+  background: #ddd2ff;
+  color: #1e2147;
+}
+
+@layer components {
+  .container-lumi {
+    @apply mx-auto w-full max-w-6xl px-5 sm:px-8;
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-lilac-200/70 bg-white/70 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-lilac-600 backdrop-blur;
+  }
+  .h-section {
+    @apply font-display text-3xl font-extrabold tracking-tight text-ink sm:text-4xl md:text-[2.75rem] md:leading-[1.1];
+  }
+  .lead {
+    @apply text-base leading-relaxed text-ink-soft sm:text-lg;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-br from-sky-500 to-lilac-500 px-6 py-3.5 text-[15px] font-bold text-white shadow-lift transition-all duration-300 hover:-translate-y-0.5 hover:shadow-glow focus:outline-none focus-visible:ring-4 focus-visible:ring-lilac-200 active:translate-y-0;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-full border border-ink/10 bg-white/80 px-6 py-3.5 text-[15px] font-bold text-ink backdrop-blur transition-all duration-300 hover:-translate-y-0.5 hover:border-lilac-300 hover:shadow-soft focus:outline-none focus-visible:ring-4 focus-visible:ring-lilac-200;
+  }
+  .card {
+    @apply rounded-4xl border border-ink/[0.06] bg-white shadow-soft;
+  }
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+.bg-dots {
+  background-image: radial-gradient(rgba(91, 135, 245, 0.12) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
