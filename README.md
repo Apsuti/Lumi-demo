@@ -27,7 +27,7 @@ Selain ──POST /api/lumi { messages }──▶ Next.js-reitti ──stream─
 ```
 
 - **Pedagoginen ohjauskerros** – `lib/lumi/prompt.ts`. Järjestelmäohje pakottaa mallin: ei vastausta heti, kysymykset, porrastetut vihjeet, ongelman pilkkominen, luovuuden ja tiedonhaun tukeminen, suora vastaus vasta useiden yritysten jälkeen. Lisäksi lapsiturvallisuus (henkilötiedot, huolet → turvallinen aikuinen / 116 111).
-- **Tilarivi** – malli aloittaa jokaisen vastauksen rivillä `<lumi>{mood, technique, phase, note, celebrate}</lumi>`. Palvelin erottaa sen (`lib/lumi/meta.ts`), ja käyttöliittymä ohjaa sillä Lumin ilmettä, ajattelun polkua, ”Mitä Lumi tekee nyt” -korttia, oivalluslistaa ja juhlahehkua. Lapsi ei näe riviä.
+- **Tilarivi** – malli aloittaa jokaisen vastauksen rivillä `<lumi>{mood, technique, phase, note, celebrate}</lumi>`. Palvelin erottaa sen (`lib/lumi/meta.ts`), ja käyttöliittymä ohjaa sillä Lumin ilmettä, ”Mitä Lumi tekee nyt” -korttia, oivalluslistaa ja juhlahehkua. Lapsi ei näe riviä.
 - **Kieltäytymiset** – pyynnöissä on `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`). Jos koko ketju kieltäytyy, Lumi ohjaa lempeästi muuhun aiheeseen.
 - **Suojaukset** – viestien pituus- ja määrärajat, IP-kohtainen rajoitin (`LUMI_RATE_LIMIT`), API-avain vain palvelimella.
 
@@ -59,7 +59,7 @@ Asetukset (`.env.local`): `ANTHROPIC_API_KEY`, `LUMI_MODEL`, `LUMI_EFFORT` (`low
 | `lib/lumi/meta.ts` | Tilarivin tyypit, validointi ja striimattava erottelija |
 | `lib/lumi/server.ts` | Anthropic-asiakas, syötteen validointi, rajoitin, virheet |
 | `app/api/lumi/route.ts` | Striimaava keskustelureitti (SSE) |
-| `components/demo/Demo.tsx` | Keskustelunäkymä, Lumi-hahmo, polku, oivallukset |
+| `components/demo/Demo.tsx` | Keskustelunäkymä, Lumi-hahmo, oivallukset |
 | `components/demo/client.ts` | SSE-lukija selaimeen |
 | `components/demo/useSpeech.ts`, `app/api/tts/route.ts`, `lib/lumi/tts.ts` | Lumin ääni: ElevenLabs + laitteen ääni varalla |
 | `components/demo/useVoiceSession.ts`, `Voice.tsx` | Jatkuva puhekeskustelu ja sen tilanäkymä |

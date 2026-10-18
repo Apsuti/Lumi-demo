@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
-import { PHASES, type LumiMeta, type LumiPhase } from "@/lib/lumi/meta";
+import type { LumiMeta } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
 import { useVoiceSession } from "./useVoiceSession";
@@ -448,7 +448,6 @@ export default function Demo() {
                                 ? "mikki pois"
                                 : "odottaa viestiäsi"
                   }
-                  phase={meta?.phase}
                   speaking={lumiSpeaking}
                   toggle={toggle}
                   onBack={reset}
@@ -611,7 +610,6 @@ function ChatHeader({
   mood,
   burst,
   status,
-  phase,
   speaking,
   toggle,
   onBack,
@@ -620,14 +618,13 @@ function ChatHeader({
   mood: LumiMood;
   burst: number;
   status: string;
-  phase?: LumiPhase;
   speaking: boolean;
   toggle: React.ReactNode;
   onBack: () => void;
   onSheet: () => void;
 }) {
   return (
-    <div className="border-b border-ink/[0.06] bg-white/70 px-4 pb-3 pt-3.5 backdrop-blur sm:px-6">
+    <div className="border-b border-ink/[0.06] bg-white/70 px-4 py-2.5 backdrop-blur sm:px-6">
       <div className="flex items-center gap-3">
         <button
           onClick={onBack}
@@ -652,38 +649,6 @@ function ChatHeader({
           <NotebookPen className="h-4 w-4" />
         </button>
       </div>
-      <PhaseBar phase={phase} />
-    </div>
-  );
-}
-
-function PhaseBar({ phase }: { phase?: LumiPhase }) {
-  const idx = phase ? PHASES.findIndex((p) => p.id === phase) : -1;
-  return (
-    <div className="mt-3 flex items-center gap-1.5" aria-label="Ajattelun polku">
-      {PHASES.map((p, i) => {
-        const done = i < idx;
-        const active = i === idx;
-        return (
-          <div key={p.id} className="flex min-w-0 flex-1 flex-col gap-1">
-            <div className="h-1.5 overflow-hidden rounded-full bg-ink/[0.06]">
-              <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-sky-400 to-lilac-500"
-                initial={false}
-                animate={{ width: done ? "100%" : active ? "60%" : "0%" }}
-                transition={{ duration: 0.6, ease: "easeOut" }}
-              />
-            </div>
-            <span
-              className={`truncate text-[10px] font-bold uppercase tracking-wider transition-colors sm:text-[11px] ${
-                active ? "text-lilac-600" : done ? "text-ink-soft" : "text-ink-mute/60"
-              } ${active ? "" : "hidden sm:block"}`}
-            >
-              {p.label}
-            </span>
-          </div>
-        );
-      })}
     </div>
   );
 }
