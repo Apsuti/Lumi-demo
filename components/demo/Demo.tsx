@@ -7,6 +7,7 @@ import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import type { LumiMeta } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
+import { vlog } from "./voiceLog";
 import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
 import { prepareImage, type PreparedImage } from "./image";
@@ -203,7 +204,11 @@ export default function Demo() {
   const send = (raw: string) => {
     const text = raw.trim();
     const image = attachment ?? undefined;
-    if ((!text && !image) || busy || preparing) return;
+    if ((!text && !image) || busy || preparing) {
+      vlog("4. Message send skipped", { empty: !text && !image, busy, preparing });
+      return;
+    }
+    vlog("4. Message send started", { text, image: Boolean(image) });
     voice.pause(); // never let the mic hear Lumi thinking out loud
     speech.stop();
     setDraft("");

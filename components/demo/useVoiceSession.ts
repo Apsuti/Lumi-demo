@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { newTurn, vlog } from "./voiceLog";
 import { diagnoseRecognitionError, detectPlatform, makeIssue, preflight, type MicIssue } from "./micDiagnostics";
 
 /**
@@ -36,12 +37,18 @@ type Rec = {
   onerror: ((e: { error: string }) => void) | null;
   onresult: ((e: { resultIndex: number; results: RecResult }) => void) | null;
   onspeechstart: (() => void) | null;
+  onspeechend?: (() => void) | null;
+  onsoundstart?: (() => void) | null;
+  onaudioend?: (() => void) | null;
 };
 
 // End of an utterance. The recogniser only marks a phrase final after it has already
 // heard a pause, so little extra waiting is needed then; mid-phrase we wait longer.
 const END_AFTER_FINAL_MS = 700;
 const END_AFTER_INTERIM_MS = 1500;
+// Android Chrome may never mark a result final: once it reports the speech has ended,
+// send what was heard after a short pause (it usually ends the session right after).
+const END_AFTER_SPEECHEND_MS = 600;
 const RESUME_DELAY_MS = 450; // let the speaker's echo die away before listening again
 const IDLE_SLEEP_MS = 3 * 60 * 1000; // after 3 quiet minutes the session rests (privacy, battery)
 
@@ -62,6 +69,8 @@ const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.
 export function useVoiceSession(onUtterance: (text: string) => void) {
   const [supported, setSupported] = useState(false);
   const [state, setState] = useState<SessionState>("off");
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [transcript, setTranscript] = useState("");
   const [level, setLevel] = useState(0);
   /** Exact reason the microphone or speech recognition is not working, with fix steps. */
@@ -137,6 +146,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     recRef.current = null;
     if (rec) {
       rec.onend = rec.onresult = rec.onerror = rec.onstart = rec.onspeechstart = null;
+      rec.onspeechend = rec.onsoundstart = rec.onaudioend = null;
       try {
         rec.abort();
       } catch {
@@ -199,17 +209,29 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     recRef.current = rec;
     textRef.current = "";
 
-    const commit = () => {
+    // Each recogniser hands over at most one utterance. This is tracked locally rather than
+    // by comparing with recRef, because Android ends the session (onend clears recRef) right
+    // after its last result – which previously made the utterance get silently dropped.
+    let handedOver = false;
+    const commit = (reason: string) => {
+      if (handedOver || !activeRef.current || pausedRef.current) return;
       const text = textRef.current.trim();
+      if (!text) return;
+      handedOver = true;
+      clear(endTimer);
       textRef.current = "";
       setTranscript("");
-      if (!text || recRef.current !== rec) return;
+      vlog("3. Transcript finalized", { reason, text });
       // Hand over the utterance and pause until Lumi has answered.
       pausedRef.current = true;
       killRec();
       setState("paused");
       clear(idleTimer);
       onUtteranceRef.current(text);
+    };
+    const commitAfter = (ms: number, reason: string) => {
+      clear(endTimer);
+      endTimer.current = setTimeout(() => commit(reason), ms);
     };
 
     // If the browser accepts start() but never actually starts listening, say so.
@@ -224,20 +246,41 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       firstStartRef.current = false;
       setState((s) => (s === "hearing" ? s : "listening"));
     };
-    rec.onspeechstart = () => recRef.current === rec && setState("hearing");
+    const detected = (ev: string) => {
+      if (recRef.current !== rec) return;
+      if (!textRef.current) newTurn();
+      vlog("1. Voice detected", ev);
+      setState("hearing");
+    };
+    rec.onsoundstart = () => recRef.current === rec && vlog("   soundstart");
+    rec.onspeechstart = () => detected("speechstart");
+    rec.onspeechend = () => {
+      vlog("   speechend", { text: textRef.current });
+      if (textRef.current) commitAfter(END_AFTER_SPEECHEND_MS, "speechend");
+    };
+    rec.onaudioend = () => {
+      vlog("   audioend", { text: textRef.current });
+      if (textRef.current) commitAfter(END_AFTER_SPEECHEND_MS, "audioend");
+    };
     rec.onresult = (e) => {
-      if (recRef.current !== rec || pausedRef.current) return;
+      if (handedOver || pausedRef.current) return;
       let text = "";
       for (let i = 0; i < e.results.length; i++) text += ` ${e.results[i][0].transcript}`;
       text = text.replace(/\s+/g, " ").trim();
       if (!text) return;
+      if (!textRef.current) {
+        newTurn();
+        if (stateRef.current !== "hearing") vlog("1. Voice detected", "first result");
+      }
+      const isFinal = e.results[e.results.length - 1].isFinal;
+      vlog("2. Transcript received", { text, isFinal, results: e.results.length });
       networkErrors.current = 0;
       textRef.current = text;
       setTranscript(text);
       setState("hearing");
       armIdle();
-      clear(endTimer);
-      endTimer.current = setTimeout(commit, e.results[e.results.length - 1].isFinal ? END_AFTER_FINAL_MS : END_AFTER_INTERIM_MS);
+      // Silence fallback: even if isFinal never arrives, send after a short quiet moment.
+      commitAfter(isFinal ? END_AFTER_FINAL_MS : END_AFTER_INTERIM_MS, isFinal ? "isFinal + pause" : "silence (no isFinal)");
     };
     rec.onerror = (e) => {
       if (recRef.current !== rec) return;
@@ -256,9 +299,10 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     };
     rec.onend = () => {
       if (recRef.current !== rec) return;
+      vlog("   onend", { text: textRef.current, handedOver });
       recRef.current = null;
-      // A browser-ended session in the middle of a phrase still counts as the child's turn.
-      if (textRef.current) return commit();
+      // Android ends the session right after the last result: that is the child's turn.
+      if (textRef.current) return commit("onend");
       if (activeRef.current && !pausedRef.current) resumeTimer.current = setTimeout(listen, 250);
     };
 
@@ -321,11 +365,11 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   const sendNow = useCallback(() => {
     if (!textRef.current) return;
     clear(endTimer);
-    const rec = recRef.current;
     const text = textRef.current.trim();
     textRef.current = "";
     setTranscript("");
-    if (!rec || !text) return;
+    if (!text) return;
+    vlog("3. Transcript finalized", { reason: "Valmis-painike", text });
     pausedRef.current = true;
     killRec();
     setState("paused");

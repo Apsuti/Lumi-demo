@@ -42,7 +42,9 @@ Selain ──POST /api/lumi { messages }──▶ Next.js-reitti ──stream─
 
 - **Puhekeskustelu** – `components/demo/useVoiceSession.ts` + `Voice.tsx` (Web Speech API, `fi-FI`, Chrome/Edge/Safari). Lapsi painaa mikkiä **kerran**, minkä jälkeen keskustelu jatkuu itsestään:
   - jatkuva tunnistus (`continuous`, Androidilla yksittäiset lausumat), joka käynnistetään hiljaa uudelleen aina kun selain lopettaa sen (hiljaisuus, aikaraja, välilehden vaihto); nopeiden uudelleenkäynnistysten silmukka estetään;
-  - lausuman loppu tunnistetaan tauosta (1,6 s valmiin lauseen jälkeen, 2,8 s kesken lauseen), ja viesti lähtee Lumille;
+  - lausuman loppu tunnistetaan tauosta (0,7 s valmiin lauseen jälkeen, 1,5 s kesken lauseen), ja viesti lähtee Lumille;
+  - **Android-yhteensopivuus**: Android Chrome lopettaa tunnistuksen (`onend`) heti lopullisen tuloksen jälkeen, eikä `isFinal` aina tule lainkaan. Viesti lähetetään siksi ensimmäisestä näistä: `isFinal` + tauko, `speechend`/`audioend` (0,6 s), `onend`, tai 1,5 s hiljaisuus pelkkien välitulosten jälkeen. Sama lausuma lähtee vain kerran;
+  - **debug-loki**: selaimen konsoliin tulostuvat rivit `[Lumi puhe] +ms` – 1. Voice detected, 2. Transcript received, 3. Transcript finalized (syy), 4. Message send started/skipped, 5. API request sent, 6. API response received. Puhelimella loki näkyy kytkemällä puhelin USB:llä tietokoneeseen ja avaamalla Chromessa `chrome://inspect`;
   - kun Lumi miettii tai puhuu, tunnistus on **tauolla** (tunnistin pysäytetään kokonaan, jottei Lumi kuule itseään), ja se jatkuu 0,45 s Lumin puheen jälkeen;
   - hiljaisuus ei katkaise keskustelua – lapsi saa miettiä rauhassa. Vasta 3 minuutin täydellisen hiljaisuuden jälkeen keskustelu ”jää lepäämään” (yksityisyys, akku);
   - tietokoneella mikin äänitaso (`getUserMedia` + AnalyserNode) näkyy rauhallisena hengittävänä pisteenä; mobiilissa käytetään tunnistimen omaa puheen alun tunnistusta;

@@ -1,4 +1,5 @@
 import type { LumiMeta } from "@/lib/lumi/meta";
+import { vlog } from "./voiceLog";
 
 export type ApiTurn = { role: "user" | "assistant"; content: string; images?: { mediaType: string; data: string }[] };
 
@@ -12,6 +13,7 @@ type Handlers = {
 /** Calls /api/lumi and dispatches its server-sent events. Never throws. */
 export async function streamLumi(messages: ApiTurn[], signal: AbortSignal, h: Handlers) {
   let res: Response;
+  vlog("5. API request sent", { turns: messages.length });
   try {
     res = await fetch("/api/lumi", {
       method: "POST",
@@ -24,6 +26,7 @@ export async function streamLumi(messages: ApiTurn[], signal: AbortSignal, h: Ha
     return;
   }
 
+  vlog("6. API response received", { status: res.status, ok: res.ok });
   if (!res.ok || !res.body) {
     let message = "Jokin meni pieleen. Kokeillaan uudelleen.";
     try {
