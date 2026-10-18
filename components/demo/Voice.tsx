@@ -17,12 +17,15 @@ export function MicButton({
   voice,
   disabled,
   big,
+  invite,
   onStart,
   onStop,
 }: {
   voice: Voice;
   disabled: boolean;
   big?: boolean;
+  /** Gentle lilac glow when it's the child's turn – the mic itself is still off. */
+  invite?: boolean;
   onStart: () => void;
   onStop: () => void;
 }) {
@@ -44,6 +47,13 @@ export function MicButton({
             : "bg-lilac-100 text-lilac-600 hover:bg-lilac-200"
       }`}
     >
+      {invite && !on && (
+        <motion.span
+          className="absolute inset-0 rounded-full ring-4 ring-lilac-300"
+          animate={{ opacity: [0.2, 0.8, 0.2] }}
+          transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+        />
+      )}
       {on &&
         [0, 0.65].map((delay) => (
           <motion.span
@@ -68,19 +78,19 @@ const STATUS: Record<VoiceState, string> = {
 
 type Props = {
   voice: Voice;
-  /** Hands-free mode: Lumi answers aloud and the mic reopens by itself. */
+  /** Spoken dialog: the child used the mic, so Lumi answers aloud. The mic never reopens by itself. */
   conversation: boolean;
-  lumi: "thinking" | "speaking" | null;
+  lumi: "thinking" | "speaking" | "done" | null;
   onSendNow: () => void;
   onCancel: () => void;
   onRetry: () => void;
   onDismiss: () => void;
-  onInterrupt: () => void;
+  onStopSpeaking: () => void;
   onEndConversation: () => void;
 };
 
 /** Always tells the child whose turn it is and whether the mic is really on. */
-export function VoicePanel({ voice, conversation, lumi, onSendNow, onCancel, onRetry, onDismiss, onInterrupt, onEndConversation }: Props) {
+export function VoicePanel({ voice, conversation, lumi, onSendNow, onCancel, onRetry, onDismiss, onStopSpeaking, onEndConversation }: Props) {
   return (
     <AnimatePresence mode="wait">
       {voice.active ? (
@@ -159,13 +169,15 @@ export function VoicePanel({ voice, conversation, lumi, onSendNow, onCancel, onR
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0 }}
-          className="mx-4 mt-3 flex items-center gap-3 rounded-3xl border border-lilac-200 bg-lilac-50/80 px-4 py-3 sm:mx-6"
+          className={`mx-4 mt-3 flex items-center gap-3 rounded-3xl border px-4 py-3 sm:mx-6 ${
+            lumi === "done" ? "border-ink/[0.08] bg-white/90" : "border-lilac-200 bg-lilac-50/80"
+          }`}
           role="status"
           aria-live="polite"
         >
           {lumi === "speaking" ? (
             <Volume2 className="h-5 w-5 shrink-0 text-lilac-500" />
-          ) : (
+          ) : lumi === "thinking" ? (
             <span className="flex shrink-0 gap-1">
               {[0, 1, 2].map((i) => (
                 <motion.span
@@ -176,19 +188,27 @@ export function VoicePanel({ voice, conversation, lumi, onSendNow, onCancel, onR
                 />
               ))}
             </span>
+          ) : (
+            <MicOff className="h-5 w-5 shrink-0 text-ink-mute" />
           )}
           <div className="min-w-0 flex-1">
-            <div className="font-display text-[15px] font-extrabold text-ink">{lumi === "speaking" ? "Lumi puhuu – kuuntele" : "Lumi miettii…"}</div>
-            <div className="text-xs text-ink-mute">Sitten mikki avautuu itsestään.</div>
+            <div className="font-display text-[15px] font-extrabold text-ink">
+              {lumi === "speaking" ? "Lumi puhuu" : lumi === "thinking" ? "Lumi miettii…" : "Mitä haluaisit sanoa seuraavaksi?"}
+            </div>
+            <div className="text-xs text-ink-mute">
+              {lumi === "done" ? "Mikki on pois päältä. Paina mikrofonia vastataksesi." : "Mikki on pois päältä."}
+            </div>
           </div>
           {lumi === "speaking" && (
-            <button onClick={onInterrupt} className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-lilac-600 ring-1 ring-lilac-200">
-              Puhu heti
+            <button onClick={onStopSpeaking} className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-lilac-600 ring-1 ring-lilac-200">
+              Hiljennä
             </button>
           )}
-          <button onClick={onEndConversation} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-ink-mute ring-1 ring-ink/10" aria-label="Lopeta puhekeskustelu">
-            <X className="h-4 w-4" />
-          </button>
+          {lumi === "done" && (
+            <button onClick={onEndConversation} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-ink-mute ring-1 ring-ink/10" aria-label="Sulje">
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </motion.div>
       ) : null}
     </AnimatePresence>
