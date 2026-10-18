@@ -4,10 +4,11 @@ import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 export const LUMI_VOICE_ID = "uBwJeWtV6tQa8ixtM7ZQ";
 
 /**
- * eleven_multilingual_v2 gives the most natural Finnish prosody. For lower latency,
- * set ELEVENLABS_MODEL=eleven_flash_v2_5 (or try eleven_v3 for more expression).
+ * eleven_flash_v2_5 is ElevenLabs' lowest-latency model and speaks Finnish – chosen so
+ * Lumi starts talking almost immediately. For slightly richer prosody at the cost of
+ * speed, set ELEVENLABS_MODEL=eleven_multilingual_v2.
  */
-export const TTS_MODEL = process.env.ELEVENLABS_MODEL || "eleven_multilingual_v2";
+export const TTS_MODEL = process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5";
 
 /**
  * Warm, calm, child-friendly delivery: enough variation to avoid a flat robotic

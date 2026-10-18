@@ -37,9 +37,10 @@ type Rec = {
   onspeechstart: (() => void) | null;
 };
 
-// End of an utterance: a short pause after a settled phrase, a longer one mid-sentence.
-const END_AFTER_FINAL_MS = 1600;
-const END_AFTER_INTERIM_MS = 2800;
+// End of an utterance. The recogniser only marks a phrase final after it has already
+// heard a pause, so little extra waiting is needed then; mid-phrase we wait longer.
+const END_AFTER_FINAL_MS = 700;
+const END_AFTER_INTERIM_MS = 1500;
 const RESUME_DELAY_MS = 450; // let the speaker's echo die away before listening again
 const IDLE_SLEEP_MS = 3 * 60 * 1000; // after 3 quiet minutes the session rests (privacy, battery)
 

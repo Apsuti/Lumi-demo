@@ -7,8 +7,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/tts?text=…  → audio/mpeg in Lumi's voice (Petteri), streamed so playback
- * starts early. A plain GET lets an <audio> element stream it natively and lets the
+ * GET /api/tts?text=…&prev=…  → audio/mpeg in Lumi's voice (Petteri), streamed so playback
+ * starts early. Replies are spoken sentence by sentence; `prev` (the sentence before)
+ * keeps the intonation continuous across those pieces. A plain GET lets an <audio> element stream it natively and lets the
  * browser cache replays of the same sentence.
  *
  * GET /api/tts?status=1  → { configured } – whether the natural voice is available.
@@ -22,6 +23,7 @@ export async function GET(req: Request) {
 
   const text = cleanForSpeech(url.searchParams.get("text") ?? "").slice(0, MAX_TTS_CHARS);
   if (!text) return jsonError(400, "bad_request", "Tyhjä teksti.");
+  const previousText = cleanForSpeech(url.searchParams.get("prev") ?? "").slice(-300) || undefined;
 
   try {
     const audio = await getTts().textToSpeech.stream(
@@ -30,6 +32,7 @@ export async function GET(req: Request) {
         text,
         modelId: TTS_MODEL,
         languageCode: languageCodeFor(TTS_MODEL),
+        previousText,
         outputFormat: "mp3_44100_128",
         voiceSettings: VOICE_SETTINGS,
       },

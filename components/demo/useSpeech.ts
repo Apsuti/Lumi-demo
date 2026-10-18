@@ -34,6 +34,15 @@ function silentWav() {
 
 type Engine = "elevenlabs" | "browser" | "none";
 
+export type SpeechStream = {
+  /** Feed more of the reply as it streams in. */
+  push: (text: string) => void;
+  /** No more text is coming; `onDone` fires after the last sentence has been spoken. */
+  end: () => void;
+  /** Stop speaking this reply. */
+  cancel: () => void;
+};
+
 /** Chrome's built-in voice cuts off long utterances, so the fallback speaks sentence by sentence. */
 function splitSentences(text: string) {
   return text.match(/[^.!?…]+[.!?…]*/g)?.map((s) => s.trim()).filter(Boolean) ?? [text];
@@ -105,8 +114,15 @@ export function useSpeech() {
     };
   }, []);
 
+  const abortRef = useRef<AbortController | null>(null);
+  const urlsRef = useRef<string[]>([]);
+
   const stop = useCallback(() => {
     runRef.current++;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    urlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+    urlsRef.current = [];
     const a = audioRef.current;
     if (a) {
       a.onended = a.onerror = null;
@@ -116,85 +132,207 @@ export function useSpeech() {
     setSpeakingId(null);
   }, []);
 
-  /** Browser voice: used when ElevenLabs is not configured or a request fails. */
+  /** Browser voice for one piece of text: used without ElevenLabs, or when a request fails. */
   const speakWithBrowser = useCallback(
-    (text: string, run: number, done: () => void) => {
-      if (!("speechSynthesis" in window)) return done();
-      const synth = window.speechSynthesis;
-      synth.cancel();
-      const parts = splitSentences(text);
-      if (!parts.length) return done();
-      let finished = false;
-      let watchdog: ReturnType<typeof setInterval> | undefined;
-      const finish = () => {
-        if (finished) return;
-        finished = true;
-        clearInterval(watchdog);
-        done();
-      };
-      // Some browsers occasionally drop the final `end` event; notice silence instead.
-      setTimeout(() => {
-        if (finished) return;
-        watchdog = setInterval(() => {
-          if (run !== runRef.current) return clearInterval(watchdog);
-          if (!synth.speaking && !synth.pending) finish();
-        }, 600);
-      }, 1200);
-      parts.forEach((part, i) => {
-        const u = new SpeechSynthesisUtterance(part);
-        u.lang = LANG;
-        if (browserVoice) u.voice = browserVoice;
-        u.rate = 0.95;
-        u.pitch = 1.1;
-        if (i === parts.length - 1) u.onend = u.onerror = finish;
-        synth.speak(u);
-      });
-    },
+    (text: string, run: number) =>
+      new Promise<void>((resolve) => {
+        if (!("speechSynthesis" in window)) return resolve();
+        const synth = window.speechSynthesis;
+        const parts = splitSentences(text);
+        if (!parts.length) return resolve();
+        let finished = false;
+        let watchdog: ReturnType<typeof setInterval> | undefined;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          clearInterval(watchdog);
+          resolve();
+        };
+        // Some browsers occasionally drop the final `end` event; notice silence instead.
+        setTimeout(() => {
+          if (finished) return;
+          watchdog = setInterval(() => {
+            if (run !== runRef.current) return finish();
+            if (!synth.speaking && !synth.pending) finish();
+          }, 600);
+        }, 1200);
+        parts.forEach((part, i) => {
+          const u = new SpeechSynthesisUtterance(part);
+          u.lang = LANG;
+          if (browserVoice) u.voice = browserVoice;
+          u.rate = 0.95;
+          u.pitch = 1.1;
+          if (i === parts.length - 1) u.onend = u.onerror = finish;
+          synth.speak(u);
+        });
+      }),
     [browserVoice],
   );
 
+  /** Plays one audio source on the (iOS-unlocked) audio element; resolves false if it can't play. */
+  const playAudio = useCallback(
+    (src: string, run: number) =>
+      new Promise<boolean>((resolve) => {
+        const audio = audioRef.current;
+        if (!audio || run !== runRef.current) return resolve(true);
+        let settled = false;
+        const settle = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          audio.onended = audio.onerror = null;
+          resolve(ok);
+        };
+        audio.onended = () => settle(true);
+        audio.onerror = () => settle(false);
+        audio.src = src;
+        audio.play().catch((e: DOMException) => {
+          // Autoplay blocked (no tap yet on iOS) or audio failed.
+          if (e?.name !== "AbortError") settle(false);
+        });
+      }),
+    [],
+  );
+
   /**
-   * Reads text aloud. `onDone` fires when it finishes on its own (or could not play) –
-   * never when stopped, so a stopped reply does not hand the turn back twice.
+   * Starts speaking a reply *while it is still being written*. Text is pushed in as it
+   * streams from Claude; every finished sentence is sent to ElevenLabs straight away.
+   * The first sentence streams directly into the player (fastest start); later ones are
+   * fetched in parallel and buffered, so they follow without gaps.
+   * `onDone` fires once everything has been spoken – never when stopped.
    */
-  const speak = useCallback(
-    (id: number, raw: string, onDone?: () => void) => {
-      const text = cleanForSpeech(raw).slice(0, MAX_TTS_CHARS);
+  const beginStream = useCallback(
+    (id: number, onDone?: () => void): SpeechStream => {
       stop();
       const run = runRef.current;
-      if (!text || engine === "none") {
-        onDone?.();
-        return;
-      }
-      setSpeakingId(id);
-      const done = () => {
-        if (run !== runRef.current) return;
+      const live = () => run === runRef.current;
+      const t0 = performance.now();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+      const useEleven = engine === "elevenlabs" && !!audioRef.current;
+
+      type Chunk = { text: string; audio?: Promise<string | null> };
+      const queue: Chunk[] = [];
+      let pending = "";
+      let prev = "";
+      let chunkCount = 0;
+      let ended = false;
+      let playing = false;
+      let started = false;
+      let finished = false;
+
+      const ttsUrl = (text: string, previous: string) => {
+        const q = new URLSearchParams({ text });
+        if (previous) q.set("prev", previous.slice(-300));
+        return `/api/tts?${q}`;
+      };
+
+      // Buffer a later sentence in the background so it can play the moment the previous ends.
+      const prefetch = (url: string) =>
+        fetch(url, { signal: ctrl.signal })
+          .then((r) => (r.ok ? r.blob() : null))
+          .then((b) => {
+            if (!b || !live()) return null;
+            const u = URL.createObjectURL(b);
+            urlsRef.current.push(u);
+            return u;
+          })
+          .catch(() => null);
+
+      const finish = () => {
+        if (finished || !live()) return;
+        finished = true;
         setSpeakingId(null);
         onDone?.();
       };
 
-      const audio = audioRef.current;
-      if (engine === "elevenlabs" && audio) {
-        let fellBack = false;
-        const fallback = () => {
-          if (fellBack || run !== runRef.current) return;
-          fellBack = true;
-          audio.onended = audio.onerror = null;
-          speakWithBrowser(text, run, done);
-        };
-        const params = new URLSearchParams({ text });
-        audio.onended = done;
-        audio.onerror = fallback;
-        audio.src = `/api/tts?${params}`;
-        audio.play().catch((e: DOMException) => {
-          // Autoplay blocked (no tap yet on iOS) or audio failed: use the browser voice.
-          if (e?.name !== "AbortError") fallback();
-        });
-        return;
-      }
-      speakWithBrowser(text, run, done);
+      const pump = async () => {
+        if (playing || !live()) return;
+        const chunk = queue.shift();
+        if (!chunk) {
+          if (ended) finish();
+          return;
+        }
+        playing = true;
+        if (!started) {
+          started = true;
+          setSpeakingId(id);
+          console.info(`[Lumi viive] puhe alkaa ${Math.round(performance.now() - t0)} ms vastauksen alusta`);
+        }
+        let ok = false;
+        if (useEleven) {
+          const src = chunk.audio ? await chunk.audio : ttsUrl(chunk.text, "");
+          if (src && live()) ok = await playAudio(src, run);
+        }
+        if (!ok && live()) await speakWithBrowser(chunk.text, run);
+        playing = false;
+        if (live()) pump();
+      };
+
+      const enqueue = (raw: string) => {
+        const text = cleanForSpeech(raw).slice(0, MAX_TTS_CHARS);
+        if (!text) return;
+        const chunk: Chunk = { text };
+        // The first sentence streams directly (no wait for the whole file); later ones are buffered.
+        if (useEleven) chunk.audio = chunkCount === 0 ? Promise.resolve(ttsUrl(text, "")) : prefetch(ttsUrl(text, prev));
+        prev = text;
+        chunkCount++;
+        queue.push(chunk);
+        pump();
+      };
+
+      const take = () => {
+        for (;;) {
+          // A sentence ends at . ! ? … followed by whitespace (so "3.5" is not split).
+          const m = /[.!?…]+["»”)]*\s/.exec(pending);
+          if (m) {
+            const end = m.index + m[0].length;
+            enqueue(pending.slice(0, end));
+            pending = pending.slice(end);
+            continue;
+          }
+          // Start sooner if the very first sentence is long: cut at a comma.
+          if (chunkCount === 0 && pending.length > 90) {
+            const comma = pending.lastIndexOf(", ", 120);
+            if (comma > 30) {
+              enqueue(pending.slice(0, comma + 1));
+              pending = pending.slice(comma + 2);
+              continue;
+            }
+          }
+          break;
+        }
+      };
+
+      return {
+        push(text: string) {
+          if (!live() || ended) return;
+          pending += text;
+          take();
+        },
+        end() {
+          if (!live() || ended) return;
+          ended = true;
+          if (pending.trim()) enqueue(pending);
+          pending = "";
+          if (!playing && !queue.length) finish();
+        },
+        cancel() {
+          if (live()) stop();
+        },
+      };
     },
-    [engine, speakWithBrowser, stop],
+    [engine, playAudio, speakWithBrowser, stop],
+  );
+
+  /** Reads a finished text aloud (replay button, short messages). Same pipeline, fed at once. */
+  const speak = useCallback(
+    (id: number, text: string, onDone?: () => void) => {
+      if (engine === "none") return onDone?.();
+      const stream = beginStream(id, onDone);
+      stream.push(text);
+      stream.end();
+    },
+    [beginStream, engine],
   );
 
   const setAutoSpeak = useCallback(
@@ -218,6 +356,7 @@ export function useSpeech() {
     hasFinnishVoice: engine === "elevenlabs" || !browserVoicesLoaded || browserVoice !== null,
     speakingId,
     speak,
+    beginStream,
     stop,
     autoSpeak,
     setAutoSpeak,

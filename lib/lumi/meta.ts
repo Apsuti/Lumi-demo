@@ -51,56 +51,67 @@ function parseMeta(json: string): LumiMeta {
 }
 
 /**
- * Incrementally separates the `<lumi>{…}</lumi>` status line from the visible
- * reply while text streams in. Tolerates other tags before it and strips any
- * technical tags from the visible text, holding back partial tags at chunk edges.
+ * Incrementally separates the `<lumi>{…}</lumi>` status line from the visible reply while
+ * text streams in. The status line normally comes last (so speech can start at once), but
+ * it is recognised anywhere. Technical tags are stripped, partial tags at chunk edges are
+ * held back, and whitespace around the status line never reaches the child.
  */
 export class MetaSplitter {
-  private buf = "";
-  private resolved = false;
   private pending = "";
+  private metaFound = false;
+  private started = false;
 
-  /** Returns the parsed meta (once) and any visible text that is safe to emit. */
+  /** Returns the parsed meta (once, whenever it completes) and visible text safe to emit. */
   push(chunk: string): { meta?: LumiMeta; text: string } {
-    if (this.resolved) return { text: this.emit(chunk) };
-    this.buf += chunk;
-
-    const end = this.buf.indexOf(CLOSE);
-    if (end !== -1) {
-      const start = this.buf.lastIndexOf(OPEN, end);
-      this.resolved = true;
-      const meta = parseMeta(start === -1 ? "" : this.buf.slice(start + OPEN.length, end));
-      return { meta, text: this.emit(this.buf.slice(end + CLOSE.length).replace(/^\s+/, "")) };
+    this.pending += chunk;
+    let meta: LumiMeta | undefined;
+    const block = /<lumi>([\s\S]*?)<\/lumi>/i.exec(this.pending);
+    if (block) {
+      if (!this.metaFound) {
+        this.metaFound = true;
+        meta = parseMeta(block[1]);
+      }
+      this.pending = this.pending.slice(0, block.index) + this.pending.slice(block.index + block[0].length);
     }
-
-    // A reply that opens with a tag is still in its preamble – wait for the status line.
-    if (this.buf.trimStart().startsWith("<") && this.buf.length < 1500) return { text: "" };
-
-    this.resolved = true;
-    return { text: this.emit(this.buf) };
+    return { meta, text: this.emit(false) };
   }
 
   /** Visible text still held back when the stream ends. */
   flush(): string {
-    if (!this.resolved) {
-      this.resolved = true;
-      this.pending += this.buf;
-    }
-    const rest = cleanVisible(this.pending.replace(/<lumi>(?![\s\S]*<\/lumi>)[\s\S]*$/i, ""));
-    this.pending = "";
-    return rest.trim() ? rest : "";
+    // An unfinished status line is never shown.
+    this.pending = this.pending.replace(/<lumi>[\s\S]*$/i, "");
+    return this.emit(true);
   }
 
-  private emit(text: string): string {
-    this.pending += text;
-    // Hold back an unfinished tag or status block until it can be removed whole.
+  private emit(final: boolean): string {
     let hold = this.pending.length;
-    const lt = this.pending.lastIndexOf("<");
-    if (lt !== -1 && !this.pending.includes(">", lt) && this.pending.length - lt < 64) hold = lt;
-    const open = this.pending.search(/<lumi>(?![\s\S]*<\/lumi>)/i);
-    if (open !== -1) hold = Math.min(hold, open);
-    const out = cleanVisible(this.pending.slice(0, hold));
+    if (!final) {
+      // Hold back an unfinished tag or status block until it can be removed whole…
+      const lt = this.pending.lastIndexOf("<");
+      if (lt !== -1 && !this.pending.includes(">", lt) && this.pending.length - lt < 64) hold = lt;
+      // A technical block (e.g. <reasoning_effort>…</reasoning_effort>) still waiting for its end tag.
+      const opener = new RegExp(`<(${JUNK_NAMES})\\b[^>]*>`, "gi");
+      for (let m; (m = opener.exec(this.pending)); ) {
+        const closed = new RegExp(`</${m[1]}>`, "i").test(this.pending.slice(m.index));
+        if (!closed && this.pending.length - m.index < 1500) {
+          hold = Math.min(hold, m.index);
+          break;
+        }
+      }
+      // …and trailing whitespace, which may turn out to precede the status line.
+      const ws = /\s*$/.exec(this.pending.slice(0, hold));
+      if (ws) hold = ws.index;
+    }
+    let out = cleanVisible(this.pending.slice(0, hold));
     this.pending = this.pending.slice(hold);
+    if (!this.started) {
+      out = out.replace(/^\s+/, "");
+      if (out) this.started = true;
+    }
+    if (final) {
+      out = out.replace(/\s+$/, "");
+      this.pending = "";
+    }
     return out;
   }
 }

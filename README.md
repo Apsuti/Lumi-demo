@@ -31,7 +31,13 @@ Selain ──POST /api/lumi { messages }──▶ Next.js-reitti ──stream─
 - **Kieltäytymiset** – pyynnöissä on `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`). Jos koko ketju kieltäytyy, Lumi ohjaa lempeästi muuhun aiheeseen.
 - **Suojaukset** – viestien pituus- ja määrärajat, IP-kohtainen rajoitin (`LUMI_RATE_LIMIT`), API-avain vain palvelimella.
 
-- **Lumin ääni (ElevenLabs)** – `app/api/tts/route.ts` muuttaa Lumin vastauksen puheeksi ElevenLabsin virallisella SDK:lla (`@elevenlabs/elevenlabs-js`, oletusmalli `eleven_multilingual_v2`) ja striimaa MP3:n; selain toistaa sen `<audio>`-elementillä (`components/demo/useSpeech.ts`). Lumi puhuu **aina samalla äänellä: Petteri** (`uBwJeWtV6tQa8ixtM7ZQ`, `lib/lumi/tts.ts`); äänenvalintaa ei ole käyttöliittymässä. Asetukset on viritetty lämpimäksi ja rauhalliseksi (stability 0,5, style 0,15, nopeus 0,93). Teksti siivotaan ennen puhetta (emojit pois, × → ”kertaa”). Jos ElevenLabs-avainta ei ole tai pyyntö epäonnistuu, Lumi puhuu laitteen omalla äänellä (SpeechSynthesis), joten puhe ei katkea.
+- **Lumin ääni (ElevenLabs)** – Lumi puhuu **aina Petteri-äänellä** (`uBwJeWtV6tQa8ixtM7ZQ`, `lib/lumi/tts.ts`), oletusmallina nopein `eleven_flash_v2_5` (suomi, `language_code: fi`). Asetukset on viritetty lämpimäksi ja rauhalliseksi (stability 0,5, style 0,15, nopeus 0,93). Jos ElevenLabs-avainta ei ole tai pyyntö epäonnistuu, Lumi puhuu laitteen omalla äänellä, joten puhe ei katkea.
+- **Nopea puheputki** – Lumi alkaa puhua jo ennen kuin vastaus on kirjoitettu loppuun:
+  1. *Puheentunnistus*: lausuma lähetetään 0,7 s valmiin lauseen jälkeen (1,5 s kesken lauseen); ”Lumi miettii…” näkyy heti.
+  2. *Claude*: vastaus striimataan; Lumin tilarivi kirjoitetaan **vastauksen loppuun**, jotta ensimmäiset sanat tulevat heti (jäsennin hyväksyy sen missä kohtaa tahansa).
+  3. *ElevenLabs*: jokainen valmis lause lähtee puheeksi heti (`useSpeech.beginStream`), edellinen lause kulkee mukana `previous_text`-kontekstina, jotta intonaatio jatkuu luontevasti.
+  4. *Toisto*: ensimmäinen lause soi suoraan striimistä, seuraavat haetaan rinnakkain puskuriin ja soivat saumattomasti peräkkäin.
+  Selaimen konsoliin tulostuu `[Lumi viive]`-rivit (ensimmäinen teksti ja puheen alku millisekunteina).
 
 - **Puhekeskustelu** – `components/demo/useVoiceSession.ts` + `Voice.tsx` (Web Speech API, `fi-FI`, Chrome/Edge/Safari). Lapsi painaa mikkiä **kerran**, minkä jälkeen keskustelu jatkuu itsestään:
   - jatkuva tunnistus (`continuous`, Androidilla yksittäiset lausumat), joka käynnistetään hiljaa uudelleen aina kun selain lopettaa sen (hiljaisuus, aikaraja, välilehden vaihto); nopeiden uudelleenkäynnistysten silmukka estetään;

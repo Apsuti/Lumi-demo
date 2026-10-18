@@ -54,7 +54,7 @@ function toApiHistory(msgs: ChatMsg[]): ApiTurn[] {
     .filter((m) => m.role === "user" || (m.status === "done" && m.text))
     .map((m): ApiTurn => {
       if (m.role === "lumi") {
-        return { role: "assistant", content: m.meta ? `<lumi>${JSON.stringify(m.meta)}</lumi>\n${m.text}` : m.text };
+        return { role: "assistant", content: m.meta ? `${m.text}\n<lumi>${JSON.stringify(m.meta)}</lumi>` : m.text };
       }
       if (!m.image) return { role: "user", content: m.text };
       if (withImages.includes(m)) return { role: "user", content: m.text, images: [{ mediaType: m.image.mediaType, data: m.image.data }] };
@@ -139,6 +139,15 @@ export default function Demo() {
     let gotMeta: LumiMeta | undefined;
     let spoken = "";
 
+    // Speak while the reply is still being written: each finished sentence goes to TTS at once.
+    // In a spoken conversation Lumi always answers aloud; listening resumes when she is done.
+    const t0 = performance.now();
+    let firstText = 0;
+    const voiceStream =
+      voiceRef.current.active || speechRef.current.autoSpeak
+        ? speechRef.current.beginStream(lumiId, () => voiceRef.current.resume())
+        : null;
+
     await streamLumi(toApiHistory(history), ctrl.signal, {
       onMeta: (m) => {
         gotMeta = m;
@@ -149,27 +158,35 @@ export default function Demo() {
         if (m.celebrate) setBurst((b) => b + 1);
       },
       onDelta: (text) => {
+        if (!firstText) {
+          firstText = performance.now();
+          console.info(`[Lumi viive] ensimmäinen teksti ${Math.round(firstText - t0)} ms`);
+        }
         spoken += text;
         setWaiting(false);
         patchMsg(lumiId, (m) => ({ text: m.text + text }));
+        voiceStream?.push(text);
       },
       onDone: (stopReason) => {
         if (stopReason === "refusal") {
+          // Drop anything already said and give the gentle refusal instead.
           spoken = REFUSED_TEXT;
           patchMsg(lumiId, { text: REFUSED_TEXT, meta: undefined, status: "done" });
           setMood("happy");
-        } else {
-          spoken ||= EMPTY_TEXT;
-          patchMsg(lumiId, { status: "done", text: spoken });
+          if (voiceStream) speechRef.current.speak(lumiId, REFUSED_TEXT, () => voiceRef.current.resume());
+          return;
         }
-        // In a spoken conversation Lumi always answers aloud; listening resumes when she is done.
-        if (voiceRef.current.active || speechRef.current.autoSpeak) {
-          speechRef.current.speak(lumiId, spoken, () => voiceRef.current.resume());
+        if (!spoken) {
+          spoken = EMPTY_TEXT;
+          voiceStream?.push(EMPTY_TEXT);
         }
+        patchMsg(lumiId, { status: "done", text: spoken });
+        voiceStream?.end();
       },
       onError: (message) => {
         patchMsg(lumiId, { text: message, status: "error" });
         setMood("curious");
+        voiceStream?.cancel();
         voiceRef.current.resume();
       },
     });
@@ -322,7 +339,7 @@ export default function Demo() {
     <div className="border-t border-ink/[0.06] bg-white/85 backdrop-blur">
       <VoicePanel
         voice={voice}
-        lumi={busy ? "thinking" : lumiSpeaking ? "speaking" : null}
+        lumi={lumiSpeaking ? "speaking" : busy ? "thinking" : null}
         onStopSpeaking={stopSpeaking}
         onSendNow={voice.sendNow}
         onEnd={endVoice}
@@ -419,10 +436,10 @@ export default function Demo() {
                   status={
                     waiting
                       ? "miettii…"
-                      : busy
-                        ? "kirjoittaa…"
-                        : lumiSpeaking
-                          ? "puhuu…"
+                      : lumiSpeaking
+                        ? "puhuu…"
+                        : busy
+                          ? "kirjoittaa…"
                           : voice.state === "hearing"
                             ? "kuulee sinut"
                             : voice.active
