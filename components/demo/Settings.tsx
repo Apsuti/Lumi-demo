@@ -1,11 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Play, Settings as Gear, Square, X } from "lucide-react";
+import { Bug, Check, Loader2, Play, RefreshCw, Settings as Gear, Square, X } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { SAMPLE_LINE } from "@/lib/lumi/voice";
-import type { useSpeech } from "./useSpeech";
+import type { VoicesResponse, useSpeech } from "./useSpeech";
 
 type Speech = ReturnType<typeof useSpeech>;
 const PREVIEW_ID = -1;
@@ -111,7 +111,9 @@ export function SettingsDialog({ open, speech, onClose }: { open: boolean; speec
                             <span className="min-w-0">
                               <span className="flex items-center gap-2 text-sm font-bold text-ink">
                                 {v.name}
+                                {v.own && <span className="rounded-full bg-lilac-100 px-2 py-0.5 text-[10px] font-extrabold text-lilac-600">Oma ääni</span>}
                                 {v.finnish && <span className="rounded-full bg-mint-100 px-2 py-0.5 text-[10px] font-extrabold text-mint-600">Suomi</span>}
+                                {v.category && !v.own && <span className="text-[10px] font-semibold text-ink-mute">{v.category}</span>}
                               </span>
                               {v.description && <span className="block truncate text-xs text-ink-mute">{v.description}</span>}
                             </span>
@@ -143,11 +145,92 @@ export function SettingsDialog({ open, speech, onClose }: { open: boolean; speec
                   äänen ElevenLabs-tilillesi, se ilmestyy tähän listaan.
                 </p>
               )}
+              {speech.engine === "elevenlabs" && <VoiceDebug speech={speech} />}
             </div>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>,
     document.body,
+  );
+}
+
+/**
+ * TEMPORARY debug view: shows exactly what ElevenLabs returned for the voice list,
+ * so a missing voice can be traced to the API or to Lumi. Remove once voices are sorted out.
+ */
+function VoiceDebug({ speech }: { speech: Speech }) {
+  const [data, setData] = useState<VoicesResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    const d = await speech.loadVoices(true);
+    setData(d);
+    setLoading(false);
+    if (d?.debug) {
+      console.log(`[Lumi debug] ${d.debug.count} ääntä lähteestä ${d.debug.source}`);
+      console.table(d.debug.voices.map((v) => ({ name: v.name, voice_id: v.voice_id, category: v.category, labels: JSON.stringify(v.labels) })));
+    }
+  };
+
+  const shownIds = new Set(speech.voices.map((v) => v.id));
+  const dbg = data?.debug;
+
+  return (
+    <details className="mt-5 rounded-2xl border border-dashed border-ink/15 px-4 py-3 text-xs" onToggle={(e) => (e.currentTarget.open && !data ? load() : null)}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 font-bold text-ink-soft">
+        <Bug className="h-3.5 w-3.5" /> Debug: mitä ElevenLabs palauttaa (väliaikainen)
+      </summary>
+      <div className="mt-3 space-y-3">
+        <button onClick={load} className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-bold text-ink-soft ring-1 ring-ink/10">
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Hae äänet uudelleen (ohittaa välimuistin)
+        </button>
+        {dbg && (
+          <>
+            <div className="rounded-xl bg-ink/[0.03] px-3 py-2 leading-relaxed">
+              <div>
+                Lähde: <b>{dbg.source}</b> · sivuja: <b>{dbg.pages ?? "–"}</b> · ääniä API:sta: <b>{dbg.count}</b> · näytetään listassa: <b>{speech.voices.length}</b>
+              </div>
+              {dbg.error && (
+                <div className="mt-1 text-[#C0643A]">
+                  Virhe: HTTP {dbg.error.status ?? "?"} – {JSON.stringify(dbg.error.body).slice(0, 300)}
+                </div>
+              )}
+            </div>
+            {dbg.voices.length > 0 && (
+              <div className="max-h-64 overflow-auto rounded-xl ring-1 ring-ink/10">
+                <table className="w-full text-left">
+                  <thead className="sticky top-0 bg-white">
+                    <tr className="text-[10px] uppercase tracking-wider text-ink-mute">
+                      <th className="px-2 py-1.5">Nimi</th>
+                      <th className="px-2 py-1.5">voice_id</th>
+                      <th className="px-2 py-1.5">category</th>
+                      <th className="px-2 py-1.5">labels</th>
+                      <th className="px-2 py-1.5">Listassa</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dbg.voices.map((v) => (
+                      <tr key={v.voice_id} className="border-t border-ink/5 align-top">
+                        <td className="px-2 py-1.5 font-semibold text-ink">{v.name}</td>
+                        <td className="px-2 py-1.5 font-mono text-[10px]">{v.voice_id}</td>
+                        <td className="px-2 py-1.5">{v.category ?? "–"}</td>
+                        <td className="px-2 py-1.5 font-mono text-[10px]">{JSON.stringify(v.labels)}</td>
+                        <td className="px-2 py-1.5">{shownIds.has(v.voice_id) ? "✓" : "✗"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <details>
+              <summary className="cursor-pointer font-semibold text-ink-mute">Raaka JSON</summary>
+              <pre className="mt-2 max-h-48 overflow-auto rounded-xl bg-ink/[0.03] p-2 text-[10px]">{JSON.stringify(dbg, null, 2)}</pre>
+            </details>
+          </>
+        )}
+      </div>
+    </details>
   );
 }

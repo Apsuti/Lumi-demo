@@ -1,6 +1,6 @@
 import { ElevenLabsError } from "@elevenlabs/elevenlabs-js";
 import { jsonError, rateLimited } from "@/lib/lumi/server";
-import { DEFAULT_VOICE_ID, TTS_MODEL, VOICE_SETTINGS, getTts, hasTts, languageCodeFor, listVoices } from "@/lib/lumi/tts";
+import { DEFAULT_VOICE_ID, TTS_MODEL, VOICE_SETTINGS, VoiceListError, getTts, hasTts, languageCodeFor, listVoices } from "@/lib/lumi/tts";
 import { MAX_TTS_CHARS, PRESET_VOICES, VOICE_ID_RE, cleanForSpeech } from "@/lib/lumi/voice";
 
 export const runtime = "nodejs";
@@ -18,23 +18,39 @@ export async function GET(req: Request) {
 
   if (url.searchParams.has("voices")) {
     // `reason` tells the tester exactly why the natural voice is or is not available.
+    const debug = url.searchParams.has("debug");
     if (!hasTts()) return Response.json({ configured: false, reason: "missing_key", defaultVoiceId: null, voices: [] });
-    let voices = PRESET_VOICES;
-    let reason = "ok";
     try {
-      const fromAccount = await listVoices();
-      if (fromAccount.length) voices = fromAccount;
+      const listing = await listVoices(debug);
+      return Response.json({
+        configured: true,
+        reason: "ok",
+        source: listing.source,
+        defaultVoiceId: DEFAULT_VOICE_ID,
+        model: TTS_MODEL,
+        voices: listing.voices.length ? listing.voices : PRESET_VOICES,
+        ...(debug && { debug: { source: listing.source, pages: listing.pages, count: listing.raw.length, voices: listing.raw } }),
+      });
     } catch (err) {
-      const status = err instanceof ElevenLabsError ? err.statusCode : undefined;
+      const status = err instanceof VoiceListError ? err.status : undefined;
+      const body = err instanceof VoiceListError ? err.body : undefined;
+      console.warn("[lumi/tts] voice list failed:", status, JSON.stringify(body ?? String(err)));
       // A scoped key may lack the "voices read" permission (401/403 "missing_permissions");
       // speech still works with the preset voices then.
-      const missingPermission = err instanceof ElevenLabsError && /permission/i.test(JSON.stringify(err.body ?? ""));
+      const missingPermission = /permission/i.test(JSON.stringify(body ?? ""));
       if (status === 401 && !missingPermission) {
         return Response.json({ configured: false, reason: "invalid_key", defaultVoiceId: null, voices: [] });
       }
-      reason = missingPermission || status === 403 ? "no_voice_permission" : "voices_unavailable";
+      return Response.json({
+        configured: true,
+        reason: missingPermission || status === 403 ? "no_voice_permission" : "voices_unavailable",
+        source: "presets",
+        defaultVoiceId: DEFAULT_VOICE_ID,
+        model: TTS_MODEL,
+        voices: PRESET_VOICES,
+        ...(debug && { debug: { source: "presets", error: { status: status ?? null, body: body ?? String(err) }, count: 0, voices: [] } }),
+      });
     }
-    return Response.json({ configured: true, reason, defaultVoiceId: DEFAULT_VOICE_ID, model: TTS_MODEL, voices });
   }
 
   if (!hasTts()) return jsonError(503, "not_configured", "ElevenLabs-avain puuttuu.");

@@ -22,6 +22,10 @@ export type VoiceOption = {
   description: string;
   /** ElevenLabs has verified this voice for Finnish. */
   finnish: boolean;
+  /** ElevenLabs category: premade, cloned, generated, professional (null for built-in fallbacks). */
+  category?: string | null;
+  /** The account owner's own voice (cloned, professional or generated). */
+  own?: boolean;
 };
 
 /**
