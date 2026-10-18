@@ -11,14 +11,18 @@ export const LUMI_VOICE_ID = "uBwJeWtV6tQa8ixtM7ZQ";
 export const TTS_MODEL = process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5";
 
 /**
- * Warm, calm, child-friendly delivery: enough variation to avoid a flat robotic
- * tone, no theatrical style exaggeration. Speed 1.1 (~18 % faster than the earlier 0.93)
- * is a natural conversational pace without sounding hurried; ElevenLabs allows 0.7–1.2.
+ * Calm, conversational delivery at an even pace from the first word to the last.
+ * - stability 0.65: steadier rhythm and tempo (0.5 let the pace drift and drag at phrase
+ *   ends); still lively enough not to sound flat or robotic.
+ * - similarityBoost 0.75: keeps Petteri's voice; higher would also copy recording artefacts.
+ * - style 0: style exaggeration amplifies the speaker's dramatic pauses and stretched
+ *   endings and makes delivery less stable (ElevenLabs recommends 0).
+ * - speed 1.1: natural conversational pace, not hurried; ElevenLabs allows 0.7–1.2.
  */
 export const VOICE_SETTINGS = {
-  stability: 0.5,
+  stability: 0.65,
   similarityBoost: 0.75,
-  style: 0.15,
+  style: 0,
   useSpeakerBoost: true,
   speed: Math.min(1.2, Math.max(0.7, Number(process.env.ELEVENLABS_SPEED) || 1.1)),
 };

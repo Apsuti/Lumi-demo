@@ -195,9 +195,12 @@ export function useSpeech() {
 
   /**
    * Starts speaking a reply *while it is still being written*. Text is pushed in as it
-   * streams from Claude; every finished sentence is sent to ElevenLabs straight away.
-   * The first sentence streams directly into the player (fastest start); later ones are
-   * fetched in parallel and buffered, so they follow without gaps.
+   * streams from Claude. The first sentence goes to ElevenLabs straight away and streams
+   * directly into the player (fastest start). The rest of the reply is sent as ONE request
+   * (with the first sentence as context) and buffered: every separate request is spoken as
+   * a complete utterance that slows down and falls at its end, so fewer seams keep the
+   * tempo even from start to finish. It is sent when the reply ends – or earlier if the
+   * player would otherwise have to wait, or the rest grows long.
    * `onDone` fires once everything has been spoken – never when stopped.
    */
   const beginStream = useCallback(
@@ -213,6 +216,7 @@ export function useSpeech() {
       type Chunk = { text: string; audio?: Promise<string | null> };
       const queue: Chunk[] = [];
       let pending = "";
+      let batch = ""; // finished sentences after the first, spoken together as one request
       let prev = "";
       let chunkCount = 0;
       let ended = false;
@@ -247,6 +251,8 @@ export function useSpeech() {
 
       const pump = async () => {
         if (playing || !live()) return;
+        // About to go quiet while the reply is still being written: speak what is ready.
+        if (!queue.length && batch.trim()) flushBatch();
         const chunk = queue.shift();
         if (!chunk) {
           if (ended) finish();
@@ -274,10 +280,16 @@ export function useSpeech() {
         const chunk: Chunk = { text };
         // The first sentence streams directly (no wait for the whole file); later ones are buffered.
         if (useEleven) chunk.audio = chunkCount === 0 ? Promise.resolve(ttsUrl(text, "")) : prefetch(ttsUrl(text, prev));
-        prev = text;
+        prev = prev ? `${prev} ${text}` : text;
         chunkCount++;
         queue.push(chunk);
         pump();
+      };
+
+      const flushBatch = () => {
+        const text = batch;
+        batch = "";
+        enqueue(text);
       };
 
       const take = () => {
@@ -286,14 +298,20 @@ export function useSpeech() {
           const m = /[.!?…]+["»”)]*\s/.exec(pending);
           if (m) {
             const end = m.index + m[0].length;
-            enqueue(pending.slice(0, end));
+            const sentence = pending.slice(0, end);
             pending = pending.slice(end);
+            if (chunkCount === 0) enqueue(sentence);
+            else {
+              batch += sentence;
+              if (batch.length > 300) flushBatch(); // very long reply: don't wait for the end
+            }
             continue;
           }
-          // Start sooner if the very first sentence is long: cut at a comma.
-          if (chunkCount === 0 && pending.length > 90) {
-            const comma = pending.lastIndexOf(", ", 120);
-            if (comma > 30) {
+          // Start sooner only if the very first sentence is really long: cut at a comma.
+          // (A cut mid-sentence is spoken as an ending, so it is kept rare.)
+          if (chunkCount === 0 && pending.length > 160) {
+            const comma = pending.lastIndexOf(", ", 200);
+            if (comma > 40) {
               enqueue(pending.slice(0, comma + 1));
               pending = pending.slice(comma + 2);
               continue;
@@ -312,8 +330,9 @@ export function useSpeech() {
         end() {
           if (!live() || ended) return;
           ended = true;
-          if (pending.trim()) enqueue(pending);
+          batch += pending;
           pending = "";
+          if (batch.trim()) flushBatch();
           if (!playing && !queue.length) finish();
         },
         cancel() {
