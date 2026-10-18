@@ -1,12 +1,14 @@
 "use client";
 
-import { AnimatePresence, motion, useInView } from "framer-motion";
-import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Sparkles, Volume2, VolumeX, X, Zap } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import { PHASES, type LumiMeta, type LumiPhase } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
+import { useVoiceInput } from "./useVoiceInput";
+import { HeardHint, MicButton, VoicePanel } from "./Voice";
 
 type ChatMsg = {
   id: number;
@@ -15,8 +17,6 @@ type ChatMsg = {
   meta?: LumiMeta;
   status?: "streaming" | "done" | "error";
 };
-
-type Compare = { status: "idle" | "loading" | "done" | "error"; text?: string | null };
 
 const WELCOME = [
   "En ole täällä tekemässä tehtäviä puolestasi.",
@@ -30,8 +30,6 @@ const STARTERS = [
   { emoji: "🎨", title: "Luova ajattelu", prompt: "Keksi peli", accent: "from-peach-400 to-lilac-500" },
   { emoji: "🔭", title: "Tiedonhaku", prompt: "Miksi taivas on sininen?", accent: "from-mint-400 to-sky-500" },
 ];
-
-const MORE_IDEAS = ["En osaa laskea 36 ÷ 4", "Kerro vaan vastaus: 7 × 8", "Miten kasvit syövät?", "Kirjoita mun läksy puolesta"];
 
 const HELPERS = ["Anna pieni vihje 💡", "En tiedä vielä", "Selitä toisella tavalla"];
 
@@ -54,27 +52,28 @@ function toApiHistory(msgs: ChatMsg[]): ApiTurn[] {
     );
 }
 
-export default function Demo({ startOpen = false }: { startOpen?: boolean }) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const inView = useInView(rootRef, { once: true, amount: 0.35 });
-
+export default function Demo() {
   const [phase, setPhase] = useState<"welcome" | "start" | "chat">("welcome");
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [waiting, setWaiting] = useState(false);
-  const [mood, setMood] = useState<LumiMood>("idle");
+  const [mood, setMood] = useState<LumiMood>("greet");
   const [burst, setBurst] = useState(0);
   const [meta, setMeta] = useState<LumiMeta | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
+  const [fromVoice, setFromVoice] = useState(false);
   const [sheet, setSheet] = useState(false);
-  const [compare, setCompare] = useState<Compare>({ status: "idle" });
   const [configured, setConfigured] = useState<boolean | null>(null);
-  const [greeted, setGreeted] = useState(false);
 
   const speech = useSpeech();
   const speechRef = useRef(speech);
   speechRef.current = speech;
+
+  const voice = useVoiceInput((text) => {
+    setDraft((d) => (d.trim() ? `${d.trim()} ${text}` : text));
+    setFromVoice(true);
+  });
 
   const abortRef = useRef<AbortController | null>(null);
   const msgsRef = useRef(msgs);
@@ -87,26 +86,24 @@ export default function Demo({ startOpen = false }: { startOpen?: boolean }) {
       .then((r) => r.json())
       .then((d: { configured?: boolean }) => setConfigured(Boolean(d.configured)))
       .catch(() => setConfigured(false));
-    return () => abortRef.current?.abort();
+    const t = setTimeout(() => setMood("happy"), 2000);
+    const t2 = setTimeout(() => setMood("idle"), 3600);
+    return () => {
+      abortRef.current?.abort();
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
   }, []);
-
-  useEffect(() => {
-    if ((inView || startOpen) && !greeted) {
-      setGreeted(true);
-      setMood("greet");
-      const t = setTimeout(() => setMood("happy"), 2000);
-      const t2 = setTimeout(() => setMood("idle"), 3600);
-      return () => {
-        clearTimeout(t);
-        clearTimeout(t2);
-      };
-    }
-  }, [inView, startOpen, greeted]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [msgs, waiting, compare]);
+  }, [msgs, waiting]);
+
+  // Lumi looks attentive while the child is talking.
+  useEffect(() => {
+    if (voice.active) setMood("curious");
+  }, [voice.active]);
 
   const patchMsg = (id: number, patch: Partial<ChatMsg> | ((m: ChatMsg) => Partial<ChatMsg>)) =>
     setMsgs((prev) => prev.map((m) => (m.id === id ? { ...m, ...(typeof patch === "function" ? patch(m) : patch) } : m)));
@@ -165,12 +162,24 @@ export default function Demo({ startOpen = false }: { startOpen?: boolean }) {
   const send = (raw: string) => {
     const text = raw.trim();
     if (!text || busy) return;
+    voice.cancel();
     speech.stop();
     setDraft("");
+    setFromVoice(false);
     if (phase !== "chat") setPhase("chat");
     const base = msgsRef.current.filter((m) => m.status !== "error");
-    if (base.length === 0) setCompare({ status: "idle" });
     ask([...base, { id: nextId(), role: "user", text }]);
+  };
+
+  const listen = () => {
+    speech.stop(); // never let the mic hear Lumi's own voice
+    setFromVoice(false);
+    voice.start();
+  };
+
+  const redo = () => {
+    setDraft("");
+    listen();
   };
 
   const retry = () => {
@@ -181,163 +190,151 @@ export default function Demo({ startOpen = false }: { startOpen?: boolean }) {
   const reset = () => {
     abortRef.current?.abort();
     speech.stop();
+    voice.cancel();
     setMsgs([]);
     setNotes([]);
     setMeta(null);
     setBusy(false);
     setWaiting(false);
-    setCompare({ status: "idle" });
+    setDraft("");
+    setFromVoice(false);
     setMood("curious");
     setSheet(false);
     setPhase("start");
   };
 
-  const loadCompare = async (prompt: string) => {
-    setCompare({ status: "loading" });
-    try {
-      const r = await fetch("/api/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-      if (!r.ok) throw new Error();
-      const d = (await r.json()) as { text: string | null };
-      setCompare({ status: "done", text: d.text });
-    } catch {
-      setCompare({ status: "error" });
-    }
-  };
-
-  const firstUser = msgs.find((m) => m.role === "user");
   const lumiSpeaking = speech.speakingId !== null;
-  const toggle = (
-    <SpeechToggle supported={speech.supported} on={speech.autoSpeak} onChange={speech.setAutoSpeak} />
+  const toggle = <SpeechToggle supported={speech.supported} on={speech.autoSpeak} onChange={speech.setAutoSpeak} />;
+
+  const composer = (placeholder: string) => (
+    <div className="border-t border-ink/[0.06] bg-white/85 backdrop-blur">
+      <VoicePanel voice={voice} onStop={voice.stop} onCancel={voice.cancel} onRetry={listen} onDismiss={voice.dismissError} />
+      <AnimatePresence>{fromVoice && draft && !voice.active && <HeardHint onRedo={redo} />}</AnimatePresence>
+      <AnimatePresence>
+        {phase === "chat" && !busy && !voice.active && !fromVoice && voice.state !== "error" && msgs.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="no-scrollbar flex gap-2 overflow-x-auto px-4 pt-3 sm:px-6"
+          >
+            {HELPERS.map((h) => (
+              <button
+                key={h}
+                onClick={() => send(h)}
+                className="shrink-0 rounded-full border border-lilac-200 bg-white px-3.5 py-1.5 text-[13px] font-semibold text-ink-soft transition hover:-translate-y-0.5 hover:border-lilac-400 hover:bg-lilac-50"
+              >
+                {h}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <Composer
+        draft={draft}
+        setDraft={(v) => {
+          setDraft(v);
+          if (!v) setFromVoice(false);
+        }}
+        disabled={busy || voice.active}
+        highlightSend={fromVoice}
+        onSend={send}
+        inputRef={inputRef}
+        placeholder={voice.active ? "Kuuntelen…" : busy ? "Lumi miettii…" : placeholder}
+        mic={voice.supported ? <MicButton voice={voice} disabled={busy} onStart={listen} onStop={voice.stop} /> : null}
+      />
+    </div>
   );
 
   return (
-    <div ref={rootRef} className="relative">
-      <div className="relative overflow-hidden rounded-[2rem] border border-white/70 bg-white/80 shadow-[0_40px_120px_-40px_rgba(91,135,245,0.45)] ring-1 ring-ink/[0.05] backdrop-blur-xl sm:rounded-[2.5rem]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_10%_0%,rgba(204,221,255,0.55),transparent),radial-gradient(50%_50%_at_100%_100%,rgba(221,210,255,0.55),transparent)]" />
-        <div className="relative h-[min(740px,calc(100svh-96px))] min-h-[580px]">
-          <AnimatePresence mode="wait">
-            {phase === "welcome" && (
-              <Welcome
-                key="welcome"
-                mood={mood}
-                burst={burst}
-                play={inView || startOpen}
-                onStart={() => {
-                  setMood("curious");
-                  setPhase("start");
-                }}
-              />
-            )}
+    <div className="relative overflow-hidden rounded-[2rem] border border-white/70 bg-white/80 shadow-[0_40px_120px_-40px_rgba(91,135,245,0.45)] ring-1 ring-ink/[0.05] backdrop-blur-xl sm:rounded-[2.5rem]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_10%_0%,rgba(204,221,255,0.55),transparent),radial-gradient(50%_50%_at_100%_100%,rgba(221,210,255,0.55),transparent)]" />
+      <div className="relative h-[calc(100svh-4.5rem)] max-h-[900px] min-h-[540px] sm:h-[calc(100svh-6rem)]">
+        <AnimatePresence mode="wait">
+          {phase === "welcome" && (
+            <Welcome
+              key="welcome"
+              mood={mood}
+              burst={burst}
+              onStart={() => {
+                setMood("curious");
+                setPhase("start");
+              }}
+            />
+          )}
 
-            {phase === "start" && (
-              <motion.div key="start" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex h-full flex-col">
-                <div className="no-scrollbar relative flex-1 overflow-y-auto px-5 py-8 sm:px-10 sm:py-10">
-                  <div className="absolute right-4 top-4 sm:right-6 sm:top-6">{toggle}</div>
-                  <Start configured={configured} onPick={send} />
-                </div>
-                <Composer draft={draft} setDraft={setDraft} disabled={false} onSend={send} inputRef={inputRef} placeholder="Kirjoita oma kysymys tai tehtävä…" />
-              </motion.div>
-            )}
+          {phase === "start" && (
+            <motion.div key="start" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="flex h-full flex-col">
+              <div className="no-scrollbar relative flex-1 overflow-y-auto px-5 py-8 sm:px-10 sm:py-10">
+                <div className="absolute right-4 top-4 sm:right-6 sm:top-6">{toggle}</div>
+                <Start configured={configured} mood={voice.active ? "curious" : mood} micSupported={voice.supported} onPick={send} />
+              </div>
+              {composer("Kirjoita tai paina mikkiä…")}
+            </motion.div>
+          )}
 
-            {phase === "chat" && (
-              <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="grid h-full grid-cols-1 lg:grid-cols-[minmax(0,1fr)_330px]">
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <ChatHeader
-                    mood={mood}
-                    burst={burst}
-                    status={waiting ? "miettii…" : busy ? "kirjoittaa…" : "kuuntelee sinua"}
-                    meta={meta}
-                    speaking={lumiSpeaking}
-                    toggle={toggle}
-                    onBack={reset}
-                    onSheet={() => setSheet(true)}
-                  />
+          {phase === "chat" && (
+            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="grid h-full grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="flex min-h-0 min-w-0 flex-col">
+                <ChatHeader
+                  mood={mood}
+                  burst={burst}
+                  status={voice.active ? "kuuntelee sinua…" : waiting ? "miettii…" : busy ? "kirjoittaa…" : lumiSpeaking ? "puhuu…" : "sinun vuorosi"}
+                  phase={meta?.phase}
+                  speaking={lumiSpeaking}
+                  toggle={toggle}
+                  onBack={reset}
+                  onSheet={() => setSheet(true)}
+                />
 
-                  <div ref={scrollRef} className="no-scrollbar flex-1 space-y-3 overflow-y-auto px-4 pb-4 pt-4 sm:px-6">
-                    {msgs.map((m) => (
-                      <div key={m.id} className="space-y-3">
-                        {m.role === "user" ? (
-                          <UserBubble text={m.text} />
-                        ) : (
-                          <LumiBubble
-                            msg={m}
-                            waiting={waiting}
-                            onRetry={retry}
-                            canSpeak={speech.supported}
-                            speaking={speech.speakingId === m.id}
-                            onSpeak={() => (speech.speakingId === m.id ? speech.stop() : speech.speak(m.id, m.text))}
-                          />
-                        )}
-                        {m === firstUser && <CompareCard compare={compare} onLoad={() => loadCompare(m.text)} />}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="border-t border-ink/[0.06] bg-white/80 backdrop-blur">
-                    <AnimatePresence>
-                      {!busy && msgs.length > 0 && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          className="no-scrollbar flex gap-2 overflow-x-auto px-4 pt-3 sm:px-6"
-                        >
-                          {HELPERS.map((h) => (
-                            <button
-                              key={h}
-                              onClick={() => send(h)}
-                              className="shrink-0 rounded-full border border-lilac-200 bg-white px-3.5 py-1.5 text-[13px] font-semibold text-ink-soft transition hover:-translate-y-0.5 hover:border-lilac-400 hover:bg-lilac-50"
-                            >
-                              {h}
-                            </button>
-                          ))}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                    <Composer
-                      draft={draft}
-                      setDraft={setDraft}
-                      disabled={busy}
-                      onSend={send}
-                      inputRef={inputRef}
-                      placeholder={busy ? "Lumi miettii…" : "Kirjoita vastauksesi omin sanoin…"}
-                      bare
-                    />
-                  </div>
-                </div>
-
-                <aside className="hidden min-h-0 flex-col gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
-                  <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} notes={notes} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
-                </aside>
-
-                <AnimatePresence>
-                  {sheet && (
-                    <motion.div
-                      className="absolute inset-0 z-20 flex flex-col bg-white/95 backdrop-blur lg:hidden"
-                      initial={{ opacity: 0, y: 30 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 30 }}
-                    >
-                      <div className="flex items-center justify-between px-5 pt-5">
-                        <span className="font-display text-base font-extrabold">Lumin näkymä</span>
-                        <button onClick={() => setSheet(false)} className="grid h-9 w-9 place-items-center rounded-full bg-ink/5" aria-label="Sulje">
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                      <div className="flex-1 space-y-4 overflow-y-auto p-5">
-                        <SidePanel mood={mood} burst={burst} talking={false} speaking={false} meta={meta} notes={notes} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} compact />
-                      </div>
-                    </motion.div>
+                <div ref={scrollRef} className="no-scrollbar flex-1 space-y-3 overflow-y-auto px-4 pb-4 pt-4 sm:px-6">
+                  {msgs.map((m) =>
+                    m.role === "user" ? (
+                      <UserBubble key={m.id} text={m.text} />
+                    ) : (
+                      <LumiBubble
+                        key={m.id}
+                        msg={m}
+                        waiting={waiting}
+                        onRetry={retry}
+                        canSpeak={speech.supported}
+                        speaking={speech.speakingId === m.id}
+                        onSpeak={() => (speech.speakingId === m.id ? speech.stop() : speech.speak(m.id, m.text))}
+                      />
+                    ),
                   )}
-                </AnimatePresence>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+                </div>
+
+                {composer("Kirjoita tai paina mikkiä…")}
+              </div>
+
+              <aside className="hidden min-h-0 flex-col gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
+                <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} notes={notes} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
+              </aside>
+
+              <AnimatePresence>
+                {sheet && (
+                  <motion.div
+                    className="absolute inset-0 z-20 flex flex-col bg-white/95 backdrop-blur lg:hidden"
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 30 }}
+                  >
+                    <div className="flex items-center justify-between px-5 pt-5">
+                      <span className="font-display text-base font-extrabold">Oivallukset</span>
+                      <button onClick={() => setSheet(false)} className="grid h-9 w-9 place-items-center rounded-full bg-ink/5" aria-label="Sulje">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="flex-1 space-y-4 overflow-y-auto p-5">
+                      <SidePanel mood={mood} burst={burst} talking={false} speaking={false} meta={meta} notes={notes} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} compact />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -345,25 +342,25 @@ export default function Demo({ startOpen = false }: { startOpen?: boolean }) {
 
 /* ───────────────────────── Welcome & start ───────────────────────── */
 
-function Welcome({ mood, burst, play, onStart }: { mood: LumiMood; burst: number; play: boolean; onStart: () => void }) {
+function Welcome({ mood, burst, onStart }: { mood: LumiMood; burst: number; onStart: () => void }) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -10 }} className="flex h-full flex-col items-center justify-center px-6 text-center">
       <LumiCharacter size={150} mood={mood} burstKey={burst} />
-      <motion.h3
+      <motion.h1
         className="mt-8 font-display text-3xl font-extrabold tracking-tight sm:text-4xl"
         initial={{ opacity: 0, y: 12 }}
-        animate={play ? { opacity: 1, y: 0 } : {}}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.5, duration: 0.6 }}
       >
         Hei! Minä olen Lumi.
-      </motion.h3>
+      </motion.h1>
       <div className="mt-4 max-w-md space-y-1.5">
         {WELCOME.map((line, i) => (
           <motion.p
             key={line}
             className={`text-base leading-relaxed sm:text-lg ${i === 2 ? "font-semibold text-lilac-600" : "text-ink-soft"}`}
             initial={{ opacity: 0, y: 10 }}
-            animate={play ? { opacity: 1, y: 0 } : {}}
+            animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.1 + i * 0.75, duration: 0.6 }}
           >
             {line}
@@ -374,7 +371,7 @@ function Welcome({ mood, burst, play, onStart }: { mood: LumiMood; burst: number
         onClick={onStart}
         className="btn-primary mt-9"
         initial={{ opacity: 0, y: 10 }}
-        animate={play ? { opacity: 1, y: 0 } : {}}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 3.6, duration: 0.5 }}
       >
         Aloitetaan yhdessä <ArrowRight className="h-4 w-4" />
@@ -383,19 +380,31 @@ function Welcome({ mood, burst, play, onStart }: { mood: LumiMood; burst: number
   );
 }
 
-function Start({ configured, onPick }: { configured: boolean | null; onPick: (p: string) => void }) {
+function Start({
+  configured,
+  mood,
+  micSupported,
+  onPick,
+}: {
+  configured: boolean | null;
+  mood: LumiMood;
+  micSupported: boolean;
+  onPick: (p: string) => void;
+}) {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="flex flex-col items-center text-center">
-        <LumiCharacter size={84} mood="curious" />
-        <h3 className="mt-5 font-display text-2xl font-extrabold tracking-tight sm:text-3xl">Mitä tutkitaan tänään?</h3>
-        <p className="mt-2 text-ink-soft">Kirjoita mitä tahansa – tai valitse esimerkki. Lumi muodostaa jokaiseen viestiin uuden tekoälyvastauksen.</p>
+        <LumiCharacter size={84} mood={mood === "idle" ? "curious" : mood} />
+        <h2 className="mt-5 font-display text-2xl font-extrabold tracking-tight sm:text-3xl">Mitä tutkitaan tänään?</h2>
+        <p className="mt-2 text-ink-soft">
+          {micSupported ? "Kirjoita, paina mikkiä ja puhu – tai valitse joku näistä." : "Kirjoita oma kysymys – tai valitse joku näistä."}
+        </p>
       </div>
 
       {configured === false && (
         <div className="mt-6 rounded-2xl border border-peach-400/40 bg-peach-100/70 px-4 py-3 text-sm text-ink-soft">
           <span className="font-bold text-ink">Tekoälyä ei ole vielä yhdistetty.</span> Lisää <code className="rounded bg-white/70 px-1">ANTHROPIC_API_KEY</code>{" "}
-          tiedostoon <code className="rounded bg-white/70 px-1">.env.local</code> ja käynnistä palvelin uudelleen.
+          palvelimen ympäristömuuttujiin.
         </div>
       )}
 
@@ -420,19 +429,6 @@ function Start({ configured, onPick }: { configured: boolean | null; onPick: (p:
           </motion.button>
         ))}
       </div>
-
-      <div className="mt-6 text-center text-[11px] font-bold uppercase tracking-wider text-ink-mute">Kokeile myös</div>
-      <div className="mt-2 flex flex-wrap justify-center gap-2">
-        {MORE_IDEAS.map((p) => (
-          <button
-            key={p}
-            onClick={() => onPick(p)}
-            className="rounded-full border border-sky-200 bg-sky-50 px-3.5 py-1.5 text-sm font-semibold text-sky-600 transition hover:-translate-y-0.5 hover:border-sky-400"
-          >
-            {p}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -443,7 +439,7 @@ function ChatHeader({
   mood,
   burst,
   status,
-  meta,
+  phase,
   speaking,
   toggle,
   onBack,
@@ -452,7 +448,7 @@ function ChatHeader({
   mood: LumiMood;
   burst: number;
   status: string;
-  meta: LumiMeta | null;
+  phase?: LumiPhase;
   speaking: boolean;
   toggle: React.ReactNode;
   onBack: () => void;
@@ -472,13 +468,8 @@ function ChatHeader({
           <LumiCharacter size={40} mood={mood} burstKey={burst} speaking={speaking} float={false} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-display text-[15px] font-extrabold">Lumi</span>
-            <span className="hidden items-center gap-1 rounded-full bg-lilac-50 px-2 py-0.5 text-[11px] font-bold text-lilac-600 sm:inline-flex">
-              <Sparkles className="h-3 w-3" /> Tekoäly
-            </span>
-          </div>
-          <div className="text-xs text-ink-mute">{speaking ? "puhuu…" : status}</div>
+          <div className="font-display text-[15px] font-extrabold">Lumi</div>
+          <div className="truncate text-xs text-ink-mute">{status}</div>
         </div>
         {toggle}
         <button
@@ -489,20 +480,7 @@ function ChatHeader({
           <NotebookPen className="h-4 w-4" />
         </button>
       </div>
-      <PhaseBar phase={meta?.phase} />
-      <AnimatePresence mode="wait">
-        {meta && (
-          <motion.div
-            key={meta.technique}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-ink-mute lg:hidden"
-          >
-            <Lightbulb className="h-3.5 w-3.5 text-lilac-500" /> Lumi nyt: <span className="truncate text-ink-soft">{meta.technique}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <PhaseBar phase={phase} />
     </div>
   );
 }
@@ -651,83 +629,62 @@ function TypingBubble() {
   );
 }
 
-function CompareCard({ compare, onLoad }: { compare: Compare; onLoad: () => void }) {
-  return (
-    <motion.div {...bubbleMotion} className="mx-auto max-w-lg">
-      <div className="rounded-2xl border border-dashed border-ink/10 bg-ink/[0.02] px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-ink-mute">
-            <Zap className="h-3.5 w-3.5" /> Tavallinen tekoäly vastaisi
-          </div>
-          {compare.status === "idle" && (
-            <button onClick={onLoad} className="rounded-full bg-white px-3 py-1 text-xs font-bold text-ink-soft ring-1 ring-ink/10 transition hover:ring-lilac-300">
-              Näytä vertailu
-            </button>
-          )}
-          {compare.status === "error" && (
-            <button onClick={onLoad} className="text-xs font-bold text-lilac-600 hover:underline">
-              Yritä uudelleen
-            </button>
-          )}
-        </div>
-        {compare.status === "loading" && <div className="mt-2 h-3 w-2/3 animate-pulse rounded-full bg-ink/[0.06]" />}
-        {compare.status === "done" && (
-          <>
-            <p className="mt-1.5 line-clamp-4 whitespace-pre-wrap text-sm text-ink-mute">{compare.text ?? "–"}</p>
-            <p className="mt-2 text-[11px] font-bold text-lilac-600">Valmis vastaus heti → lapsen oma ajattelu jää väliin. Lumi valitsee toisin.</p>
-          </>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
 function Composer({
   draft,
   setDraft,
   disabled,
+  highlightSend,
   onSend,
   inputRef,
   placeholder,
-  bare,
+  mic,
 }: {
   draft: string;
   setDraft: (v: string) => void;
   disabled: boolean;
+  highlightSend: boolean;
   onSend: (v: string) => void;
   inputRef: React.RefObject<HTMLInputElement>;
   placeholder: string;
-  bare?: boolean;
+  mic: React.ReactNode;
 }) {
+  const canSend = !disabled && !!draft.trim();
   return (
-    <div className={bare ? "px-4 pb-4 pt-3 sm:px-6" : "border-t border-ink/[0.06] bg-white/80 px-4 pb-4 pt-3 backdrop-blur sm:px-6"}>
+    <div className="px-4 pb-4 pt-3 sm:px-6">
       <form
         onSubmit={(e) => {
           e.preventDefault();
           onSend(draft);
         }}
-        className={`flex items-center gap-2 rounded-full border bg-white p-1.5 pl-5 transition ${
-          disabled ? "border-ink/10" : "border-lilac-300 shadow-[0_0_0_4px_rgba(196,179,255,0.25)]"
-        }`}
+        className="flex items-center gap-2"
       >
-        <input
-          ref={inputRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          disabled={disabled}
-          placeholder={placeholder}
-          className="min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-mute/70 disabled:cursor-not-allowed"
-          maxLength={1200}
-          aria-label="Viestisi Lumille"
-        />
-        <button
-          type="submit"
-          disabled={disabled || !draft.trim()}
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-sky-500 to-lilac-500 text-white transition disabled:opacity-30"
-          aria-label="Lähetä"
+        <div
+          className={`flex min-w-0 flex-1 items-center rounded-full border bg-white py-1.5 pl-5 pr-1.5 transition ${
+            disabled ? "border-ink/10" : "border-lilac-300 shadow-[0_0_0_4px_rgba(196,179,255,0.25)]"
+          }`}
         >
-          <SendHorizontal className="h-4 w-4" />
-        </button>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={disabled}
+            placeholder={placeholder}
+            className="h-9 min-w-0 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-mute/70 disabled:cursor-not-allowed"
+            maxLength={1200}
+            aria-label="Viestisi Lumille"
+          />
+          <motion.button
+            type="submit"
+            disabled={!canSend}
+            animate={highlightSend && canSend ? { scale: [1, 1.12, 1] } : { scale: 1 }}
+            transition={highlightSend ? { duration: 1.1, repeat: Infinity } : {}}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-sky-500 to-lilac-500 text-white transition disabled:opacity-30"
+            aria-label="Lähetä"
+          >
+            <SendHorizontal className="h-4 w-4" />
+          </motion.button>
+        </div>
+        {mic}
       </form>
     </div>
   );
@@ -761,29 +718,10 @@ function SidePanel({
           <LumiCharacter size={124} mood={mood} burstKey={burst} talking={talking} speaking={speaking} />
         </div>
       )}
-      <div className="rounded-3xl bg-gradient-to-br from-ink to-[#2E3270] p-4 text-white shadow-lift">
-        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-lilac-200">
-          <Lightbulb className="h-3.5 w-3.5" /> Mitä Lumi tekee nyt
-        </div>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={meta?.technique ?? "none"}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            className="mt-1.5 font-display text-[17px] font-extrabold leading-snug"
-          >
-            {meta?.technique ?? "Kuuntelee ja odottaa"}
-          </motion.div>
-        </AnimatePresence>
-        <p className="mt-1.5 text-xs leading-relaxed text-white/60">
-          Tekoäly kertoo itse, mitä pedagogista keinoa se käyttää. Näkymä on vanhemmille ja opettajille.
-        </p>
-      </div>
 
       <div className="rounded-3xl border border-ink/[0.06] bg-white/90 p-4 shadow-soft">
         <div className="mb-3 flex items-baseline justify-between">
-          <h4 className="font-display text-sm font-extrabold">Sinun oivalluksesi</h4>
+          <h3 className="font-display text-sm font-extrabold">Sinun oivalluksesi</h3>
           <span className="text-[11px] font-medium text-ink-mute">Ideat ovat sinun</span>
         </div>
         {notes.length === 0 ? (
@@ -816,14 +754,18 @@ function SidePanel({
         </p>
       )}
 
-      <p className="px-1 text-[11px] leading-relaxed text-ink-mute">
-        Vastaukset luo kielimalli (Anthropic Claude) Lumin pedagogisen ohjauskerroksen mukaisesti. Tekoäly voi erehtyä.
-      </p>
+      <details className="group mt-auto rounded-2xl border border-ink/[0.06] bg-white/70 px-3 py-2 text-xs text-ink-mute">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 font-bold">
+          <Lightbulb className="h-3.5 w-3.5 text-lilac-500" /> Aikuiselle: mitä Lumi tekee nyt
+        </summary>
+        <p className="mt-2 text-sm font-bold text-ink">{meta?.technique ?? "Ei vielä vastauksia."}</p>
+        <p className="mt-2 leading-relaxed">Vastaukset luo kielimalli (Anthropic Claude) Lumin pedagogisen ohjauksen mukaisesti. Tekoäly voi erehtyä.</p>
+      </details>
     </>
   );
 }
 
-/* ───────────────────────── Speech ───────────────────────── */
+/* ───────────────────────── Speech output ───────────────────────── */
 
 function SpeechToggle({ supported, on, onChange }: { supported: boolean; on: boolean; onChange: (v: boolean) => void }) {
   if (!supported) return null;

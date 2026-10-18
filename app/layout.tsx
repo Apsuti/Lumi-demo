@@ -7,7 +7,7 @@ const sans = Plus_Jakarta_Sans({ subsets: ["latin", "latin-ext"], variable: "--f
 const display = Nunito({ subsets: ["latin", "latin-ext"], variable: "--font-display", display: "swap", weight: ["600", "700", "800", "900"] });
 
 export const metadata: Metadata = {
-  title: "Lumi – Tekoälypohjainen oppimiskaveri",
+  title: "Lumi – oppimiskaveri",
   description: "Tavallinen tekoäly antaa vastauksia. Lumi auttaa lapsia löytämään ne itse.",
 };
 
