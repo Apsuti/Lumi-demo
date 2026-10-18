@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MAX_TTS_CHARS, cleanForSpeech, type VoiceOption } from "@/lib/lumi/voice";
+import { MAX_TTS_CHARS, cleanForSpeech } from "@/lib/lumi/voice";
 
 const LANG = "fi-FI";
 const AUTO_KEY = "lumi.autoSpeak";
-const VOICE_KEY = "lumi.voiceId";
 
 /**
  * A short silent WAV. Playing it inside a tap "unlocks" the audio element on iOS,
@@ -35,21 +34,6 @@ function silentWav() {
 
 type Engine = "elevenlabs" | "browser" | "none";
 
-export type VoicesResponse = {
-  configured?: boolean;
-  reason?: string;
-  source?: string;
-  defaultVoiceId?: string;
-  voices?: VoiceOption[];
-  debug?: {
-    source: string;
-    pages?: number;
-    count: number;
-    error?: { status: number | null; body: unknown };
-    voices: { name: string; voice_id: string; category: string | null; labels: Record<string, string> }[];
-  };
-};
-
 /** Chrome's built-in voice cuts off long utterances, so the fallback speaks sentence by sentence. */
 function splitSentences(text: string) {
   return text.match(/[^.!?…]+[.!?…]*/g)?.map((s) => s.trim()).filter(Boolean) ?? [text];
@@ -68,47 +52,11 @@ export function useSpeech() {
   const [engine, setEngine] = useState<Engine>("none");
   const [browserVoice, setBrowserVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [browserVoicesLoaded, setBrowserVoicesLoaded] = useState(false);
-  const [voices, setVoices] = useState<VoiceOption[]>([]);
-  const [voiceId, setVoiceIdState] = useState<string | null>(null);
-  /** Why the natural voice is (not) in use – shown in settings. */
-  const [ttsStatus, setTtsStatus] = useState<string>("checking");
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [autoSpeak, setAutoSpeakState] = useState(false);
   const runRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const unlockedRef = useRef(false);
-  const voiceIdRef = useRef<string | null>(null);
-  voiceIdRef.current = voiceId;
-  const [voiceSource, setVoiceSource] = useState<string | null>(null);
-
-  /**
-   * Fetches the account's voices. `debug` bypasses the server cache and also returns
-   * exactly what ElevenLabs sent (for the temporary debug view in settings).
-   */
-  const loadVoices = useCallback(async (debug = false): Promise<VoicesResponse | null> => {
-    try {
-      const d = (await (await fetch(`/api/tts?voices=1${debug ? "&debug=1" : ""}`)).json()) as VoicesResponse;
-      setTtsStatus(d.reason ?? (d.configured ? "ok" : "missing_key"));
-      if (!d.configured) return d;
-      audioRef.current ??= new Audio();
-      setEngine("elevenlabs");
-      setVoices(d.voices ?? []);
-      setVoiceSource(d.source ?? null);
-      let saved: string | null = null;
-      try {
-        saved = localStorage.getItem(VOICE_KEY);
-      } catch {
-        /* ignore */
-      }
-      const known = (d.voices ?? []).some((v) => v.id === saved);
-      setVoiceIdState(known ? saved : (d.defaultVoiceId ?? null));
-      return d;
-    } catch {
-      setTtsStatus("server_error");
-      return null;
-    }
-  }, []);
-  const loadVoicesRef = useRef(loadVoices);
 
   useEffect(() => {
     const hasBrowser = typeof window !== "undefined" && "speechSynthesis" in window;
@@ -119,8 +67,15 @@ export function useSpeech() {
       /* storage unavailable – default off */
     }
 
-    // Natural voice from the server, if configured.
-    loadVoicesRef.current();
+    // Natural voice (ElevenLabs, always the same voice) when the server has a key.
+    fetch("/api/tts?status=1")
+      .then((r) => r.json())
+      .then((d: { configured?: boolean }) => {
+        if (!d.configured) return;
+        audioRef.current ??= new Audio();
+        setEngine("elevenlabs");
+      })
+      .catch(() => {});
 
     // Unlock audio playback on the first tap (needed on iOS/Safari).
     const unlock = () => {
@@ -203,7 +158,7 @@ export function useSpeech() {
    * never when stopped, so a stopped reply does not hand the turn back twice.
    */
   const speak = useCallback(
-    (id: number, raw: string, onDone?: () => void, voiceOverride?: string) => {
+    (id: number, raw: string, onDone?: () => void) => {
       const text = cleanForSpeech(raw).slice(0, MAX_TTS_CHARS);
       stop();
       const run = runRef.current;
@@ -228,8 +183,6 @@ export function useSpeech() {
           speakWithBrowser(text, run, done);
         };
         const params = new URLSearchParams({ text });
-        const v = voiceOverride ?? voiceIdRef.current;
-        if (v) params.set("voice", v);
         audio.onended = done;
         audio.onerror = fallback;
         audio.src = `/api/tts?${params}`;
@@ -257,26 +210,12 @@ export function useSpeech() {
     [stop],
   );
 
-  const setVoiceId = useCallback((id: string) => {
-    setVoiceIdState(id);
-    try {
-      localStorage.setItem(VOICE_KEY, id);
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   return {
     supported: engine !== "none",
     engine,
-    ttsStatus,
-    voiceSource,
-    loadVoices,
     /** False when only the browser voice is available and it has no Finnish voice. */
     hasFinnishVoice: engine === "elevenlabs" || !browserVoicesLoaded || browserVoice !== null,
-    voices,
-    voiceId,
-    setVoiceId,
     speakingId,
     speak,
     stop,

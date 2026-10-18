@@ -11,7 +11,6 @@ import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
 import { prepareImage, type PreparedImage } from "./image";
 import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
-import { SettingsButton, SettingsDialog } from "./Settings";
 
 type ChatMsg = {
   id: number;
@@ -79,7 +78,6 @@ export default function Demo() {
   const [preparing, setPreparing] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const dragDepth = useRef(0);
 
   const speech = useSpeech();
@@ -312,12 +310,6 @@ export default function Demo() {
           speech.setAutoSpeak(on);
         }}
       />
-      <SettingsButton
-        onClick={() => {
-          voice.pause(); // voice samples must not be heard as the child's answer
-          setSettingsOpen(true);
-        }}
-      />
     </div>
   );
 
@@ -495,14 +487,6 @@ export default function Demo() {
           )}
         </AnimatePresence>
       </div>
-      <SettingsDialog
-        open={settingsOpen}
-        speech={speech}
-        onClose={() => {
-          setSettingsOpen(false);
-          voice.resume();
-        }}
-      />
     </div>
   );
 }
