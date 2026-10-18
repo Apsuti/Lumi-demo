@@ -9,6 +9,8 @@ type Props = {
   size?: number;
   mood?: LumiMood;
   talking?: boolean;
+  /** Reading a reply aloud: soft light ripples, stronger halo and a moving mouth. */
+  speaking?: boolean;
   float?: boolean;
   /** Change this number to replay the celebration burst. */
   burstKey?: number;
@@ -25,6 +27,7 @@ export default function LumiCharacter({
   size = 180,
   mood = "idle",
   talking = false,
+  speaking = false,
   float = true,
   burstKey = 0,
   className = "",
@@ -50,7 +53,7 @@ export default function LumiCharacter({
   const tilt = mood === "curious" ? 8 : mood === "think" ? -6 : 0;
   const look =
     mood === "think" ? { x: 3, y: -4 } : mood === "curious" ? { x: -1.5, y: 1 } : { x: 0, y: 0 };
-  const glowStrength = mood === "celebrate" ? 1 : mood === "happy" ? 0.8 : 0.55;
+  const glowStrength = mood === "celebrate" || speaking ? 1 : mood === "happy" ? 0.8 : 0.55;
 
   return (
     <div
@@ -71,8 +74,26 @@ export default function LumiCharacter({
             ? { opacity: glowStrength }
             : { opacity: [glowStrength * 0.75, glowStrength, glowStrength * 0.75], scale: [0.96, 1.04, 0.96] }
         }
-        transition={{ duration: mood === "celebrate" ? 1.6 : 4.5, repeat: Infinity, ease: "easeInOut" }}
+        transition={{ duration: mood === "celebrate" ? 1.6 : speaking ? 1.1 : 4.5, repeat: Infinity, ease: "easeInOut" }}
       />
+
+      {/* voice ripples while reading aloud */}
+      <AnimatePresence>
+        {speaking && !reduce && (
+          <motion.div key="ripples" className="pointer-events-none absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            {[0, 0.8].map((delay) => (
+              <motion.span
+                key={delay}
+                className="absolute inset-[12%] rounded-full border-2 border-lilac-300/70"
+                style={{ boxShadow: "0 0 18px rgba(167,139,250,0.35)" }}
+                initial={{ scale: 0.85, opacity: 0 }}
+                animate={{ scale: [0.85, 1.35], opacity: [0.7, 0] }}
+                transition={{ duration: 1.6, repeat: Infinity, ease: "easeOut", delay }}
+              />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* celebration burst */}
       <AnimatePresence>
@@ -90,11 +111,12 @@ export default function LumiCharacter({
           className="h-full w-full"
           animate={{
             rotate: tilt,
-            scale: mood === "celebrate" ? [1, 1.08, 1] : mood === "greet" ? [1, 1.04, 1] : 1,
+            scale:
+              mood === "celebrate" ? [1, 1.08, 1] : speaking && !reduce ? [1, 1.035, 1] : mood === "greet" ? [1, 1.04, 1] : 1,
           }}
           transition={{
             rotate: { type: "spring", stiffness: 120, damping: 12 },
-            scale: { duration: 0.7, ease: "easeOut" },
+            scale: speaking ? { duration: 0.9, repeat: Infinity, ease: "easeInOut" } : { duration: 0.7, ease: "easeOut" },
           }}
           style={{ transformOrigin: "50% 70%" }}
         >
@@ -216,7 +238,7 @@ export default function LumiCharacter({
             )}
 
             {/* mouth */}
-            <Mouth mood={mood} talking={talking && !reduce} />
+            <Mouth mood={speaking && mood === "celebrate" ? "happy" : mood} talking={(talking || speaking) && !reduce} />
           </svg>
         </motion.div>
       </motion.div>
