@@ -160,7 +160,7 @@ export function useSpeech() {
           const u = new SpeechSynthesisUtterance(part);
           u.lang = LANG;
           if (browserVoice) u.voice = browserVoice;
-          u.rate = 0.95;
+          u.rate = 1.12; // natural conversational pace, matching the ElevenLabs voice
           u.pitch = 1.1;
           if (i === parts.length - 1) u.onend = u.onerror = finish;
           synth.speak(u);

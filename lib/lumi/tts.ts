@@ -12,14 +12,15 @@ export const TTS_MODEL = process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5";
 
 /**
  * Warm, calm, child-friendly delivery: enough variation to avoid a flat robotic
- * tone, no theatrical style exaggeration, slightly slower than default.
+ * tone, no theatrical style exaggeration. Speed 1.1 (~18 % faster than the earlier 0.93)
+ * is a natural conversational pace without sounding hurried; ElevenLabs allows 0.7–1.2.
  */
 export const VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
   style: 0.15,
   useSpeakerBoost: true,
-  speed: Number(process.env.ELEVENLABS_SPEED || 0.93),
+  speed: Math.min(1.2, Math.max(0.7, Number(process.env.ELEVENLABS_SPEED) || 1.1)),
 };
 
 export function hasTts() {
