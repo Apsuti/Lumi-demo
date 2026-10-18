@@ -17,15 +17,24 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
 
   if (url.searchParams.has("voices")) {
-    if (!hasTts()) return Response.json({ configured: false, defaultVoiceId: null, voices: [] });
+    // `reason` tells the tester exactly why the natural voice is or is not available.
+    if (!hasTts()) return Response.json({ configured: false, reason: "missing_key", defaultVoiceId: null, voices: [] });
     let voices = PRESET_VOICES;
+    let reason = "ok";
     try {
       const fromAccount = await listVoices();
       if (fromAccount.length) voices = fromAccount;
-    } catch {
-      /* fall back to presets */
+    } catch (err) {
+      const status = err instanceof ElevenLabsError ? err.statusCode : undefined;
+      // A scoped key may lack the "voices read" permission (401/403 "missing_permissions");
+      // speech still works with the preset voices then.
+      const missingPermission = err instanceof ElevenLabsError && /permission/i.test(JSON.stringify(err.body ?? ""));
+      if (status === 401 && !missingPermission) {
+        return Response.json({ configured: false, reason: "invalid_key", defaultVoiceId: null, voices: [] });
+      }
+      reason = missingPermission || status === 403 ? "no_voice_permission" : "voices_unavailable";
     }
-    return Response.json({ configured: true, defaultVoiceId: DEFAULT_VOICE_ID, model: TTS_MODEL, voices });
+    return Response.json({ configured: true, reason, defaultVoiceId: DEFAULT_VOICE_ID, model: TTS_MODEL, voices });
   }
 
   if (!hasTts()) return jsonError(503, "not_configured", "ElevenLabs-avain puuttuu.");

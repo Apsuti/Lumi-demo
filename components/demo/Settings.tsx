@@ -10,6 +10,18 @@ import type { useSpeech } from "./useSpeech";
 type Speech = ReturnType<typeof useSpeech>;
 const PREVIEW_ID = -1;
 
+/** Plain-language diagnosis for the adult setting Lumi up. */
+const TTS_HELP: Record<string, string> = {
+  checking: "Tarkistetaan äänipalvelua…",
+  missing_key:
+    "Palvelin ei näe ELEVENLABS_API_KEY-muuttujaa. Tarkista Vercelissä nimi, että muuttuja on käytössä Production-ympäristössä, ja tee Redeploy.",
+  invalid_key: "ElevenLabs hylkäsi avaimen. Tarkista, että avain on kopioitu kokonaan ja että se on voimassa.",
+  no_voice_permission:
+    "Avaimella ei ole lupaa lukea äänilistaa, joten näytetään valmiit äänet. Salli avaimelle ElevenLabsissa Voices-lukuoikeus, niin omat äänesi näkyvät.",
+  voices_unavailable: "Äänilistaa ei saatu haettua juuri nyt, joten näytetään valmiit äänet.",
+  server_error: "Lumin palvelimeen ei saatu yhteyttä äänen tarkistamiseksi. Päivitä sivu.",
+};
+
 export function SettingsButton({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -75,10 +87,10 @@ export function SettingsDialog({ open, speech, onClose }: { open: boolean; speec
 
               <h3 className="mt-5 text-[11px] font-bold uppercase tracking-wider text-ink-mute">Lumin ääni</h3>
               {speech.engine !== "elevenlabs" ? (
-                <p className="mt-2 rounded-2xl bg-peach-100/70 px-4 py-3 text-sm text-ink-soft">
-                  Luonnollinen ääni ei ole käytössä, joten Lumi käyttää laitteen omaa puheääntä. Ota se käyttöön lisäämällä{" "}
-                  <code className="rounded bg-white/70 px-1">ELEVENLABS_API_KEY</code> palvelimen ympäristömuuttujiin.
-                </p>
+                <div className="mt-2 rounded-2xl bg-peach-100/70 px-4 py-3 text-sm text-ink-soft">
+                  <p>Luonnollinen ääni ei ole käytössä, joten Lumi käyttää laitteen omaa puheääntä.</p>
+                  <p className="mt-2 font-semibold text-ink">{TTS_HELP[speech.ttsStatus] ?? TTS_HELP.missing_key}</p>
+                </div>
               ) : (
                 <ul className="mt-2 space-y-2">
                   {speech.voices.map((v) => {
@@ -121,6 +133,9 @@ export function SettingsDialog({ open, speech, onClose }: { open: boolean; speec
                     );
                   })}
                 </ul>
+              )}
+              {speech.engine === "elevenlabs" && TTS_HELP[speech.ttsStatus] && (
+                <p className="mt-3 rounded-2xl bg-peach-100/70 px-4 py-2.5 text-xs text-ink-soft">{TTS_HELP[speech.ttsStatus]}</p>
               )}
               {speech.engine === "elevenlabs" && (
                 <p className="mt-3 text-xs leading-relaxed text-ink-mute">

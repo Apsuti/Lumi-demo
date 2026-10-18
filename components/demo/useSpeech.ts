@@ -55,6 +55,8 @@ export function useSpeech() {
   const [browserVoicesLoaded, setBrowserVoicesLoaded] = useState(false);
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [voiceId, setVoiceIdState] = useState<string | null>(null);
+  /** Why the natural voice is (not) in use – shown in settings. */
+  const [ttsStatus, setTtsStatus] = useState<string>("checking");
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [autoSpeak, setAutoSpeakState] = useState(false);
   const runRef = useRef(0);
@@ -75,7 +77,8 @@ export function useSpeech() {
     // Natural voice from the server, if configured.
     fetch("/api/tts?voices=1")
       .then((r) => r.json())
-      .then((d: { configured?: boolean; defaultVoiceId?: string; voices?: VoiceOption[] }) => {
+      .then((d: { configured?: boolean; reason?: string; defaultVoiceId?: string; voices?: VoiceOption[] }) => {
+        setTtsStatus(d.reason ?? (d.configured ? "ok" : "missing_key"));
         if (!d.configured) return;
         audioRef.current ??= new Audio();
         setEngine("elevenlabs");
@@ -89,7 +92,7 @@ export function useSpeech() {
         const known = (d.voices ?? []).some((v) => v.id === saved);
         setVoiceIdState(known ? saved : (d.defaultVoiceId ?? null));
       })
-      .catch(() => {});
+      .catch(() => setTtsStatus("server_error"));
 
     // Unlock audio playback on the first tap (needed on iOS/Safari).
     const unlock = () => {
@@ -238,6 +241,7 @@ export function useSpeech() {
   return {
     supported: engine !== "none",
     engine,
+    ttsStatus,
     /** False when only the browser voice is available and it has no Finnish voice. */
     hasFinnishVoice: engine === "elevenlabs" || !browserVoicesLoaded || browserVoice !== null,
     voices,

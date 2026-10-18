@@ -23,13 +23,13 @@ export const VOICE_SETTINGS = {
 };
 
 export function hasTts() {
-  return Boolean(process.env.ELEVENLABS_API_KEY);
+  return Boolean(process.env.ELEVENLABS_API_KEY?.trim());
 }
 
 let client: ElevenLabsClient | null = null;
 export function getTts() {
   // ELEVENLABS_BASE_URL is optional, e.g. for EU data residency.
-  client ??= new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY, baseUrl: process.env.ELEVENLABS_BASE_URL || undefined });
+  client ??= new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY?.trim(), baseUrl: process.env.ELEVENLABS_BASE_URL || undefined });
   return client;
 }
 
