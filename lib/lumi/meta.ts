@@ -32,52 +32,75 @@ export function normalizeMeta(raw: unknown): LumiMeta {
 const OPEN = "<lumi>";
 const CLOSE = "</lumi>";
 
+/** Technical tags the model may echo (e.g. `<reasoning_effort>5</reasoning_effort>`); never shown to a child. */
+const JUNK_NAMES = "lumi|reasoning_effort|effort|thinking|antml:[a-z_]+";
+const JUNK_BLOCK = new RegExp(`<(${JUNK_NAMES})\\b[^>]*>[\\s\\S]*?</\\1>`, "gi");
+const JUNK_TAG = new RegExp(`</?(${JUNK_NAMES})\\b[^>]*>`, "gi");
+
+/** Removes status lines and other technical tags from text meant for the child. */
+export function cleanVisible(text: string) {
+  return text.replace(JUNK_BLOCK, "").replace(JUNK_TAG, "");
+}
+
+function parseMeta(json: string): LumiMeta {
+  try {
+    return normalizeMeta(JSON.parse(json));
+  } catch {
+    return normalizeMeta(null);
+  }
+}
+
 /**
- * Incrementally separates the leading `<lumi>{…}</lumi>` status line from the
- * visible reply while text streams in.
+ * Incrementally separates the `<lumi>{…}</lumi>` status line from the visible
+ * reply while text streams in. Tolerates other tags before it and strips any
+ * technical tags from the visible text, holding back partial tags at chunk edges.
  */
 export class MetaSplitter {
   private buf = "";
   private resolved = false;
+  private pending = "";
 
   /** Returns the parsed meta (once) and any visible text that is safe to emit. */
   push(chunk: string): { meta?: LumiMeta; text: string } {
-    if (this.resolved) return { text: chunk };
+    if (this.resolved) return { text: this.emit(chunk) };
     this.buf += chunk;
-    const lead = this.buf.trimStart();
 
-    // Still could be the opening tag – wait for more.
-    if (lead.length < OPEN.length && OPEN.startsWith(lead)) return { text: "" };
-
-    if (!lead.startsWith(OPEN)) {
+    const end = this.buf.indexOf(CLOSE);
+    if (end !== -1) {
+      const start = this.buf.lastIndexOf(OPEN, end);
       this.resolved = true;
-      return { text: this.buf };
+      const meta = parseMeta(start === -1 ? "" : this.buf.slice(start + OPEN.length, end));
+      return { meta, text: this.emit(this.buf.slice(end + CLOSE.length).replace(/^\s+/, "")) };
     }
 
-    const end = lead.indexOf(CLOSE);
-    if (end === -1) {
-      if (lead.length > 800) {
-        // Never closed: drop the broken header rather than show it to a child.
-        this.resolved = true;
-        return { text: "" };
-      }
-      return { text: "" };
-    }
+    // A reply that opens with a tag is still in its preamble – wait for the status line.
+    if (this.buf.trimStart().startsWith("<") && this.buf.length < 1500) return { text: "" };
 
     this.resolved = true;
-    let meta: LumiMeta;
-    try {
-      meta = normalizeMeta(JSON.parse(lead.slice(OPEN.length, end)));
-    } catch {
-      meta = normalizeMeta(null);
-    }
-    return { meta, text: lead.slice(end + CLOSE.length).replace(/^\s+/, "") };
+    return { text: this.emit(this.buf) };
   }
 
-  /** Text still held back when the stream ends without a complete header. */
+  /** Visible text still held back when the stream ends. */
   flush(): string {
-    if (this.resolved) return "";
-    this.resolved = true;
-    return this.buf.trimStart().startsWith(OPEN) ? "" : this.buf;
+    if (!this.resolved) {
+      this.resolved = true;
+      this.pending += this.buf;
+    }
+    const rest = cleanVisible(this.pending.replace(/<lumi>(?![\s\S]*<\/lumi>)[\s\S]*$/i, ""));
+    this.pending = "";
+    return rest.trim() ? rest : "";
+  }
+
+  private emit(text: string): string {
+    this.pending += text;
+    // Hold back an unfinished tag or status block until it can be removed whole.
+    let hold = this.pending.length;
+    const lt = this.pending.lastIndexOf("<");
+    if (lt !== -1 && !this.pending.includes(">", lt) && this.pending.length - lt < 64) hold = lt;
+    const open = this.pending.search(/<lumi>(?![\s\S]*<\/lumi>)/i);
+    if (open !== -1) hold = Math.min(hold, open);
+    const out = cleanVisible(this.pending.slice(0, hold));
+    this.pending = this.pending.slice(hold);
+    return out;
   }
 }

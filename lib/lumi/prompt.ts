@@ -49,4 +49,4 @@ Kentät:
 - note: jos lapsen viimeisimmässä viestissä oli hänen oma ideansa, yrityksensä tai oivalluksensa, tiivistä se enintään kahdeksalla sanalla lapsen näkökulmasta (esimerkiksi "Arvasin, että taivas heijastaa merta"). Muuten null. Älä kirjoita noteen mitään, mitä lapsi ei itse keksinyt.
 - celebrate: true vain, kun lapsi itse ratkaisi tai oivalsi jotain olennaista.
 
-Lapsi ei näe tilariviä. Älä mainitse sitä viestissäsi.`;
+Lapsi ei näe tilariviä. Älä mainitse sitä viestissäsi. Älä kirjoita tilarivin lisäksi mitään muita tageja tai teknisiä merkintöjä (esimerkiksi <reasoning_effort>) – tilarivin jälkeen tulee vain viesti lapselle.`;
