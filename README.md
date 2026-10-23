@@ -27,7 +27,7 @@ Selain ──POST /api/lumi { messages }──▶ Next.js-reitti ──stream─
 ```
 
 - **Pedagoginen ohjauskerros** – `lib/lumi/prompt.ts`. Lumin tavoite on lapsen **itsenäisyys, ei pitkä keskustelu**: Lumi toimii väliaikaisena tukena (scaffolding). Se arvioi lapsen osaamisen, antaa vain tarvittavan tuen (paljon → jonkin verran → vähän → ei tarvita), siirtää vastuuta vähitellen (”Kokeile seuraava itse”), etsii aktiivisesti hetkiä vähentää apua ja päättää ohjauksen luontevasti, kun lapsi näyttää ymmärtävän (”Vaikuttaa siltä, että osaat tämän jo. Jatka omin voimin ja tule takaisin, jos tarvitset apua.”). Lumi ei pitkitä keskustelua vastakysymysketjuilla, lisätehtävillä tai sitouttamalla. Lisäksi: ei vastausta heti, porrastetut vihjeet, luovuuden ja tiedonhaun tukeminen, suora vastaus vasta useiden yritysten jälkeen. Lisäksi lapsiturvallisuus (henkilötiedot, huolet → turvallinen aikuinen / 116 111).
-- **Tilarivi** – malli päättää jokaisen vastauksen rivillä `<lumi>{mood, technique, support, note, celebrate, handoff}</lumi>`. Palvelin erottaa sen (`lib/lumi/meta.ts`), ja käyttöliittymä ohjaa sillä Lumin ilmettä, ”Mitä Lumi tekee nyt” -korttia, oivalluslistaa, juhlahehkua ja **Itsenäisyys**-mittaria (jokaisen vastauksen tukitaso pylväänä – mitä korkeampi, sitä vähemmän apua tarvittiin). Kun `handoff` on tosi, Lumi vetäytyy: puhekeskustelu päättyy Lumin puheen jälkeen (”Lumi jäi odottamaan. Paina mikkiä, jos tarvitset vielä apua.”) eikä jatkoa houkuttelevia pikavalintoja näytetä. Lapsi ei näe riviä.
+- **Tilarivi** – malli päättää jokaisen vastauksen rivillä `<lumi>{mood, technique, support, celebrate, handoff}</lumi>`. Palvelin erottaa sen (`lib/lumi/meta.ts`), ja käyttöliittymä ohjaa sillä Lumin ilmettä, ”Mitä Lumi tekee nyt” -korttia, juhlahehkua ja **Itsenäisyys**-mittaria (jokaisen vastauksen tukitaso pylväänä – mitä korkeampi, sitä vähemmän apua tarvittiin). Kun `handoff` on tosi, Lumi vetäytyy: puhekeskustelu päättyy Lumin puheen jälkeen (”Lumi jäi odottamaan. Paina mikkiä, jos tarvitset vielä apua.”) eikä jatkoa houkuttelevia pikavalintoja näytetä. Lapsi ei näe riviä.
 - **Kieltäytymiset** – pyynnöissä on `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`). Jos koko ketju kieltäytyy, Lumi ohjaa lempeästi muuhun aiheeseen.
 - **Suojaukset** – viestien pituus- ja määrärajat, IP-kohtainen rajoitin (`LUMI_RATE_LIMIT`), API-avain vain palvelimella.
 
@@ -71,7 +71,7 @@ Asetukset (`.env.local`): `ANTHROPIC_API_KEY`, `LUMI_MODEL`, `LUMI_EFFORT` (`low
 | `lib/lumi/meta.ts` | Tilarivin tyypit, validointi ja striimattava erottelija |
 | `lib/lumi/server.ts` | Anthropic-asiakas, syötteen validointi, rajoitin, virheet |
 | `app/api/lumi/route.ts` | Striimaava keskustelureitti (SSE) |
-| `components/demo/Demo.tsx` | Keskustelunäkymä, Lumi-hahmo, oivallukset |
+| `components/demo/Demo.tsx` | Keskustelunäkymä ja Lumi-hahmo |
 | `components/demo/client.ts` | SSE-lukija selaimeen |
 | `components/demo/useSpeech.ts`, `app/api/tts/route.ts`, `lib/lumi/tts.ts` | Lumin ääni: ElevenLabs + laitteen ääni varalla |
 | `components/demo/useVoiceSession.ts`, `Voice.tsx` | Jatkuva puhekeskustelu ja sen tilanäkymä |

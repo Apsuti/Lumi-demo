@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Settings, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Lightbulb, RotateCcw, SendHorizontal, Settings, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import type { LumiMeta, LumiSupport } from "@/lib/lumi/meta";
@@ -75,11 +75,9 @@ export default function Demo() {
   const [mood, setMood] = useState<LumiMood>("greet");
   const [burst, setBurst] = useState(0);
   const [meta, setMeta] = useState<LumiMeta | null>(null);
-  const [notes, setNotes] = useState<string[]>([]);
   /** Support level of each Lumi reply – falling support shows the child's growing independence. */
   const [trail, setTrail] = useState<LumiSupport[]>([]);
   const [draft, setDraft] = useState("");
-  const [sheet, setSheet] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [attachment, setAttachment] = useState<PreparedImage | null>(null);
   const [preparing, setPreparing] = useState(false);
@@ -167,7 +165,6 @@ export default function Demo() {
         setMeta(m);
         setTrail((t) => [...t, m.support]);
         patchMsg(lumiId, { meta: m });
-        if (m.note) setNotes((n) => (n.includes(m.note!) ? n : [...n, m.note!]));
         setMood(m.celebrate ? "celebrate" : m.mood);
         if (m.celebrate) setBurst((b) => b + 1);
       },
@@ -322,7 +319,6 @@ export default function Demo() {
     speech.stop();
     voice.end();
     setMsgs([]);
-    setNotes([]);
     setTrail([]);
     setMeta(null);
     setBusy(false);
@@ -331,7 +327,6 @@ export default function Demo() {
     setAttachment(null);
     setImageError(null);
     setMood("curious");
-    setSheet(false);
     setPhase("start");
   };
 
@@ -501,7 +496,6 @@ export default function Demo() {
                   speaking={lumiSpeaking}
                   toggle={toggle}
                   onBack={reset}
-                  onSheet={() => setSheet(true)}
                 />
 
                 <div ref={scrollRef} className="no-scrollbar flex-1 space-y-3 overflow-y-auto px-4 pb-4 pt-4 sm:px-6">
@@ -525,30 +519,9 @@ export default function Demo() {
                 {composer("Kirjoita viesti…")}
               </div>
 
-              <aside className="hidden min-h-0 flex-col gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
-                <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} notes={notes} trail={trail} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
+              <aside className="hidden min-h-0 flex-col justify-center gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
+                <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} trail={trail} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
               </aside>
-
-              <AnimatePresence>
-                {sheet && (
-                  <motion.div
-                    className="absolute inset-0 z-20 flex flex-col bg-white/95 backdrop-blur lg:hidden"
-                    initial={{ opacity: 0, y: 30 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 30 }}
-                  >
-                    <div className="flex items-center justify-between px-5 pt-5">
-                      <span className="font-display text-base font-extrabold">Oivallukset</span>
-                      <button onClick={() => setSheet(false)} className="grid h-9 w-9 place-items-center rounded-full bg-ink/5" aria-label="Sulje">
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                    <div className="flex-1 space-y-4 overflow-y-auto p-5">
-                      <SidePanel mood={mood} burst={burst} talking={false} speaking={false} meta={meta} notes={notes} trail={trail} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} compact />
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </motion.div>
           )}
         </AnimatePresence>
@@ -671,7 +644,6 @@ function ChatHeader({
   speaking,
   toggle,
   onBack,
-  onSheet,
 }: {
   mood: LumiMood;
   burst: number;
@@ -679,7 +651,6 @@ function ChatHeader({
   speaking: boolean;
   toggle: React.ReactNode;
   onBack: () => void;
-  onSheet: () => void;
 }) {
   return (
     <div className="border-b border-ink/[0.06] bg-white/70 px-4 py-2.5 backdrop-blur sm:px-6">
@@ -699,13 +670,6 @@ function ChatHeader({
           <div className="truncate text-xs text-ink-mute">{status}</div>
         </div>
         {toggle}
-        <button
-          onClick={onSheet}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sky-50 text-sky-600 lg:hidden"
-          aria-label="Oivallukset"
-        >
-          <NotebookPen className="h-4 w-4" />
-        </button>
       </div>
     </div>
   );
@@ -901,55 +865,21 @@ function SidePanel({
   talking,
   speaking,
   meta,
-  notes,
   trail,
   noFinnishVoice,
-  compact,
 }: {
   mood: LumiMood;
   burst: number;
   talking: boolean;
   speaking: boolean;
   meta: LumiMeta | null;
-  notes: string[];
   trail: LumiSupport[];
   noFinnishVoice: boolean;
-  compact?: boolean;
 }) {
   return (
     <>
-      {!compact && (
-        <div className="flex flex-col items-center pt-2">
-          <LumiCharacter size={124} mood={mood} burstKey={burst} talking={talking} speaking={speaking} />
-        </div>
-      )}
-
-      <div className="rounded-3xl border border-ink/[0.06] bg-white/90 p-4 shadow-soft">
-        <div className="mb-3 flex items-baseline justify-between">
-          <h3 className="font-display text-sm font-extrabold">Sinun oivalluksesi</h3>
-          <span className="text-[11px] font-medium text-ink-mute">Ideat ovat sinun</span>
-        </div>
-        {notes.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-ink/10 px-3 py-3 text-sm text-ink-mute">
-            Kun kerrot oman arvauksen, idean tai yrityksen, se tallentuu tähän.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            <AnimatePresence initial={false}>
-              {notes.map((n) => (
-                <motion.li
-                  key={n}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="flex items-start gap-2.5 rounded-2xl bg-lilac-50 px-3 py-2.5 text-sm font-semibold text-ink"
-                >
-                  <span className="mt-0.5 text-lilac-500">✦</span>
-                  {n}
-                </motion.li>
-              ))}
-            </AnimatePresence>
-          </ul>
-        )}
+      <div className="flex flex-col items-center pt-2">
+        <LumiCharacter size={124} mood={mood} burstKey={burst} talking={talking} speaking={speaking} />
       </div>
 
       <Independence trail={trail} />
@@ -961,7 +891,7 @@ function SidePanel({
         </p>
       )}
 
-      <details className="group mt-auto rounded-2xl border border-ink/[0.06] bg-white/70 px-3 py-2 text-xs text-ink-mute">
+      <details className="group rounded-2xl border border-ink/[0.06] bg-white/70 px-3 py-2 text-xs text-ink-mute">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 font-bold">
           <Lightbulb className="h-3.5 w-3.5 text-lilac-500" /> Aikuiselle: mitä Lumi tekee nyt
         </summary>

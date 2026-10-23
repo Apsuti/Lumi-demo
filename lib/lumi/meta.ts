@@ -6,7 +6,6 @@ export type LumiMeta = {
   mood: LumiMood;
   technique: string;
   support: LumiSupport;
-  note: string | null;
   celebrate: boolean;
   /** Lumi stepped back: the child carries on alone. */
   handoff: boolean;
@@ -22,8 +21,7 @@ export function normalizeMeta(raw: unknown): LumiMeta {
   const handoff = o.handoff === true;
   const support = SUPPORTS.includes(o.support as LumiSupport) ? (o.support as LumiSupport) : handoff ? "none" : "medium";
   const technique = typeof o.technique === "string" && o.technique.trim() ? o.technique.trim().slice(0, 60) : "Ohjaa ajattelemaan";
-  const note = typeof o.note === "string" && o.note.trim() ? o.note.trim().slice(0, 90) : null;
-  return { mood, support, technique, note, celebrate: o.celebrate === true || mood === "celebrate", handoff };
+  return { mood, support, technique, celebrate: o.celebrate === true || mood === "celebrate", handoff };
 }
 
 const OPEN = "<lumi>";
