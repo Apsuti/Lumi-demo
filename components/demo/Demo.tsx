@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Settings, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
-import type { LumiMeta } from "@/lib/lumi/meta";
+import type { LumiMeta, LumiSupport } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
 import { vlog } from "./voiceLog";
@@ -41,6 +41,9 @@ const STARTERS = [
 
 const HELPERS = ["Anna pieni vihje 💡", "En tiedä vielä", "Selitä toisella tavalla"];
 
+/** Shown when Lumi has stepped back and ended the spoken conversation. */
+const HANDOFF_NOTICE = "Lumi jäi odottamaan. Paina mikkiä, jos tarvitset vielä apua.";
+
 const EMPTY_TEXT = "Hmm, ajatus karkasi. Voisitko kertoa sen vielä uudestaan? 🙂";
 
 const REFUSED_TEXT =
@@ -73,6 +76,8 @@ export default function Demo() {
   const [burst, setBurst] = useState(0);
   const [meta, setMeta] = useState<LumiMeta | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
+  /** Support level of each Lumi reply – falling support shows the child's growing independence. */
+  const [trail, setTrail] = useState<LumiSupport[]>([]);
   const [draft, setDraft] = useState("");
   const [sheet, setSheet] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -145,18 +150,22 @@ export default function Demo() {
     let spoken = "";
 
     // Speak while the reply is still being written: each finished sentence goes to TTS at once.
-    // In a spoken conversation Lumi always answers aloud; listening resumes when she is done.
+    // In a spoken conversation Lumi always answers aloud; listening resumes when she is done –
+    // unless she has just handed the task back to the child, which ends the spoken conversation.
     const t0 = performance.now();
     let firstText = 0;
     const voiceStream =
       voiceRef.current.active || speechRef.current.autoSpeak
-        ? speechRef.current.beginStream(lumiId, () => voiceRef.current.resume())
+        ? speechRef.current.beginStream(lumiId, () =>
+            gotMeta?.handoff ? voiceRef.current.end(HANDOFF_NOTICE) : voiceRef.current.resume(),
+          )
         : null;
 
     await streamLumi(toApiHistory(history), ctrl.signal, {
       onMeta: (m) => {
         gotMeta = m;
         setMeta(m);
+        setTrail((t) => [...t, m.support]);
         patchMsg(lumiId, { meta: m });
         if (m.note) setNotes((n) => (n.includes(m.note!) ? n : [...n, m.note!]));
         setMood(m.celebrate ? "celebrate" : m.mood);
@@ -314,6 +323,7 @@ export default function Demo() {
     voice.end();
     setMsgs([]);
     setNotes([]);
+    setTrail([]);
     setMeta(null);
     setBusy(false);
     setWaiting(false);
@@ -402,7 +412,7 @@ export default function Demo() {
         )}
       </AnimatePresence>
       <AnimatePresence>
-        {phase === "chat" && !busy && !voice.active && !attachment && !preparing && voice.state !== "error" && msgs.length > 0 && (
+        {phase === "chat" && !busy && !voice.active && !attachment && !preparing && voice.state !== "error" && msgs.length > 0 && !meta?.handoff && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -516,7 +526,7 @@ export default function Demo() {
               </div>
 
               <aside className="hidden min-h-0 flex-col gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
-                <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} notes={notes} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
+                <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} notes={notes} trail={trail} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
               </aside>
 
               <AnimatePresence>
@@ -534,7 +544,7 @@ export default function Demo() {
                       </button>
                     </div>
                     <div className="flex-1 space-y-4 overflow-y-auto p-5">
-                      <SidePanel mood={mood} burst={burst} talking={false} speaking={false} meta={meta} notes={notes} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} compact />
+                      <SidePanel mood={mood} burst={burst} talking={false} speaking={false} meta={meta} notes={notes} trail={trail} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} compact />
                     </div>
                   </motion.div>
                 )}
@@ -892,6 +902,7 @@ function SidePanel({
   speaking,
   meta,
   notes,
+  trail,
   noFinnishVoice,
   compact,
 }: {
@@ -901,6 +912,7 @@ function SidePanel({
   speaking: boolean;
   meta: LumiMeta | null;
   notes: string[];
+  trail: LumiSupport[];
   noFinnishVoice: boolean;
   compact?: boolean;
 }) {
@@ -940,6 +952,8 @@ function SidePanel({
         )}
       </div>
 
+      <Independence trail={trail} />
+
       {noFinnishVoice && (
         <p className="rounded-2xl bg-peach-100/70 px-3 py-2 text-[11px] leading-relaxed text-ink-soft">
           Laitteelta ei löytynyt suomenkielistä puheääntä, joten ääntäminen voi kuulostaa oudolta. Suomen äänen voi lisätä
@@ -955,6 +969,43 @@ function SidePanel({
         <p className="mt-2 leading-relaxed">Vastaukset luo kielimalli (Anthropic Claude) Lumin pedagogisen ohjauksen mukaisesti. Tekoäly voi erehtyä.</p>
       </details>
     </>
+  );
+}
+
+const SUPPORT_LABEL: Record<LumiSupport, string> = {
+  high: "Lumi tukee paljon",
+  medium: "Lumi antaa vihjeitä",
+  low: "Teet jo melkein itse",
+  none: "Pärjäät omin voimin",
+};
+const SUPPORT_LEVEL: Record<LumiSupport, number> = { high: 1, medium: 2, low: 3, none: 4 };
+
+/**
+ * Lumi's measure of success: how independent the child has become. Each bar is one of
+ * Lumi's replies; the taller, the less help was needed.
+ */
+function Independence({ trail }: { trail: LumiSupport[] }) {
+  if (!trail.length) return null;
+  const last = trail[trail.length - 1];
+  const shown = trail.slice(-12);
+  return (
+    <div className="rounded-3xl border border-ink/[0.06] bg-white/90 p-4 shadow-soft">
+      <div className="mb-3 flex items-baseline justify-between">
+        <h3 className="font-display text-sm font-extrabold">Itsenäisyys</h3>
+        <span className="text-[11px] font-medium text-ink-mute">{SUPPORT_LABEL[last]}</span>
+      </div>
+      <div className="flex h-10 items-end gap-1" aria-label={`Itsenäisyys: ${SUPPORT_LABEL[last]}`}>
+        {shown.map((s, i) => (
+          <motion.span
+            key={trail.length - shown.length + i}
+            initial={{ height: 0 }}
+            animate={{ height: `${SUPPORT_LEVEL[s] * 25}%` }}
+            className={`flex-1 rounded-md ${s === "none" ? "bg-mint-400" : "bg-lilac-300"}`}
+          />
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-ink-mute">Mitä korkeampi pylväs, sitä vähemmän apua tarvitsit. Lumin tavoite on, ettet tarvitse sitä.</p>
+    </div>
   );
 }
 

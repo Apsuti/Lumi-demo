@@ -455,7 +455,8 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     onUtteranceRef.current(text);
   }, []);
 
-  const end = useCallback(() => {
+  /** Ends the spoken conversation; an optional calm note tells the child how to come back. */
+  const end = useCallback((note?: string) => {
     activeRef.current = false;
     pausedRef.current = false;
     clear(resumeTimer);
@@ -465,6 +466,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     textRef.current = "";
     setTranscript("");
     setState("off");
+    if (typeof note === "string") setNotice(note);
   }, [stopMeter]);
 
   const dismiss = useCallback(() => {

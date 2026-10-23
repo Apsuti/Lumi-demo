@@ -1,32 +1,29 @@
 export type LumiMood = "curious" | "think" | "happy" | "celebrate";
-export type LumiPhase = "ymmärrä" | "tutki" | "kokeile" | "oivalla" | "pohdi";
+/** How much help Lumi gave in a reply. Falling support = growing independence. */
+export type LumiSupport = "high" | "medium" | "low" | "none";
 
 export type LumiMeta = {
   mood: LumiMood;
   technique: string;
-  phase: LumiPhase;
+  support: LumiSupport;
   note: string | null;
   celebrate: boolean;
+  /** Lumi stepped back: the child carries on alone. */
+  handoff: boolean;
 };
 
-export const PHASES: { id: LumiPhase; label: string }[] = [
-  { id: "ymmärrä", label: "Ymmärrä" },
-  { id: "tutki", label: "Tutki" },
-  { id: "kokeile", label: "Kokeile" },
-  { id: "oivalla", label: "Oivalla" },
-  { id: "pohdi", label: "Pohdi" },
-];
-
 const MOODS: LumiMood[] = ["curious", "think", "happy", "celebrate"];
+export const SUPPORTS: LumiSupport[] = ["high", "medium", "low", "none"];
 
 /** Validates the model's status line; anything malformed falls back to safe defaults. */
 export function normalizeMeta(raw: unknown): LumiMeta {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const mood = MOODS.includes(o.mood as LumiMood) ? (o.mood as LumiMood) : "curious";
-  const phase = PHASES.some((p) => p.id === o.phase) ? (o.phase as LumiPhase) : "tutki";
+  const handoff = o.handoff === true;
+  const support = SUPPORTS.includes(o.support as LumiSupport) ? (o.support as LumiSupport) : handoff ? "none" : "medium";
   const technique = typeof o.technique === "string" && o.technique.trim() ? o.technique.trim().slice(0, 60) : "Ohjaa ajattelemaan";
   const note = typeof o.note === "string" && o.note.trim() ? o.note.trim().slice(0, 90) : null;
-  return { mood, phase, technique, note, celebrate: o.celebrate === true || mood === "celebrate" };
+  return { mood, support, technique, note, celebrate: o.celebrate === true || mood === "celebrate", handoff };
 }
 
 const OPEN = "<lumi>";
