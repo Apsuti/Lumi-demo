@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Lightbulb, NotebookPen, RotateCcw, SendHorizontal, Settings, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import type { LumiMeta } from "@/lib/lumi/meta";
@@ -10,6 +10,7 @@ import { useSpeech } from "./useSpeech";
 import { vlog } from "./voiceLog";
 import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
+import { DiagnosticsPanel } from "./Diagnostics";
 import { prepareImage, type PreparedImage } from "./image";
 import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
 
@@ -79,6 +80,7 @@ export default function Demo() {
   const [preparing, setPreparing] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [diagnostics, setDiagnostics] = useState(false);
   const dragDepth = useRef(0);
 
   const speech = useSpeech();
@@ -106,6 +108,8 @@ export default function Demo() {
       .then((r) => r.json())
       .then((d: { configured?: boolean }) => setConfigured(Boolean(d.configured)))
       .catch(() => setConfigured(false));
+    // ?debug in the address opens the device diagnostics straight away.
+    if (new URLSearchParams(window.location.search).has("debug")) setDiagnostics(true);
     const t = setTimeout(() => setMood("happy"), 2000);
     const t2 = setTimeout(() => setMood("idle"), 3600);
     return () => {
@@ -321,9 +325,28 @@ export default function Demo() {
     setPhase("start");
   };
 
+  const testVoice = () => {
+    voice.pause();
+    speech.speak(-1, "Hei! Minä olen Lumi. Kuuletko minut hyvin?", () => voiceRef.current.resume());
+  };
+
+  /** iPhone refused to play Lumi's voice without a tap: this tap unlocks it and replays the reply. */
+  const replayLast = () => {
+    const last = [...msgsRef.current].reverse().find((m) => m.role === "lumi" && m.status === "done");
+    if (last) speakMessage(last);
+  };
+
   const lumiSpeaking = speech.speakingId !== null;
   const toggle = (
     <div className="flex shrink-0 items-center gap-1.5">
+      <button
+        onClick={() => setDiagnostics(true)}
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ink/[0.04] text-ink-mute transition hover:bg-ink/[0.08]"
+        aria-label="Laitetiedot"
+        title="Laitetiedot ja vianetsintä"
+      >
+        <Settings className="h-4 w-4" />
+      </button>
       <SpeechToggle
         supported={speech.supported}
         on={speech.autoSpeak || voice.active}
@@ -337,7 +360,7 @@ export default function Demo() {
 
   const micButton = (big?: boolean) =>
     // Always shown: on a browser without speech recognition, a tap explains exactly why.
-    <MicButton voice={voice} big={big} disabled={busy} onStart={startVoice} onEnd={endVoice} />;
+    <MicButton voice={voice} big={big} disabled={busy} onStart={startVoice} onEnd={endVoice} onTap={voice.tapToTalk} />;
 
   const composer = (placeholder: string) => (
     <div className="border-t border-ink/[0.06] bg-white/85 backdrop-blur">
@@ -347,9 +370,20 @@ export default function Demo() {
         onStopSpeaking={stopSpeaking}
         onSendNow={voice.sendNow}
         onEnd={endVoice}
+        onTap={voice.tapToTalk}
         onRestart={startVoice}
         onDismiss={voice.dismiss}
+        onDiagnostics={() => setDiagnostics(true)}
       />
+      {speech.blocked && !lumiSpeaking && (
+        <button
+          onClick={replayLast}
+          className="mx-4 mt-3 flex w-[calc(100%-2rem)] items-center gap-3 rounded-2xl bg-lilac-50 px-4 py-2.5 text-left text-sm font-semibold text-ink ring-1 ring-lilac-200 sm:mx-6 sm:w-[calc(100%-3rem)]"
+        >
+          <Volume2 className="h-5 w-5 shrink-0 text-lilac-500" />
+          <span className="flex-1">Laite esti Lumin äänen. Napauta tästä, niin kuulet vastauksen.</span>
+        </button>
+      )}
       <AttachmentPreview src={attachment?.dataUrl ?? null} busy={preparing} onRemove={() => setAttachment(null)} />
       <AnimatePresence>
         {imageError && (
@@ -446,6 +480,8 @@ export default function Demo() {
                           ? "kirjoittaa…"
                           : voice.state === "hearing"
                             ? "kuulee sinut"
+                            : voice.state === "tap"
+                              ? "odottaa vastaustasi"
                             : voice.active
                               ? "kuuntelee rauhassa"
                               : voice.supported
@@ -507,6 +543,14 @@ export default function Demo() {
           )}
         </AnimatePresence>
       </div>
+      <DiagnosticsPanel
+        open={diagnostics}
+        onClose={() => setDiagnostics(false)}
+        sessionState={voice.state}
+        engine={speech.engine}
+        browserVoiceName={speech.browserVoiceName}
+        onTestVoice={testVoice}
+      />
     </div>
   );
 }

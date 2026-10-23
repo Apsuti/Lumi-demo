@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { newTurn, vlog } from "./voiceLog";
-import { diagnoseRecognitionError, detectPlatform, makeIssue, preflight, type MicIssue } from "./micDiagnostics";
+import { debugError, debugSet, newTurn, vlog } from "./voiceLog";
+import { diagnoseRecognitionError, detectPlatform, makeIssue, preflight, setAudioSession, type MicIssue } from "./micDiagnostics";
 
 /**
  * Continuous, patient voice conversation on top of the Web Speech API.
@@ -14,6 +14,8 @@ import { diagnoseRecognitionError, detectPlatform, makeIssue, preflight, type Mi
  *  - afterwards listening resumes by itself,
  *  - browsers end recognition sessions on their own (silence, ~60 s limits, tab
  *    switches); every such end is restarted quietly.
+ *  - if the browser refuses to restart listening without a tap (seen on iPhone/Safari),
+ *    the session switches to "tap": the child presses the mic each time they answer.
  */
 export type SessionState =
   | "off"
@@ -21,6 +23,7 @@ export type SessionState =
   | "listening" // mic on, waiting patiently
   | "hearing" // voice detected, words arriving
   | "paused" // Lumi is thinking or speaking – recognition stopped on purpose
+  | "tap" // waiting for a press of the mic (the browser only listens after a tap)
   | "error";
 
 type RecResult = ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
@@ -55,6 +58,9 @@ const IDLE_SLEEP_MS = 3 * 60 * 1000; // after 3 quiet minutes the session rests 
 /** Recognition errors that end the session; the exact cause is diagnosed before it is shown. */
 const FATAL = new Set(["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"]);
 const START_TIMEOUT_MS = 7000; // recognition asked to start but never did
+// The first start may show permission prompts (on iPhone two: microphone + speech
+// recognition); give the child and adult time to read and accept them.
+const FIRST_START_TIMEOUT_MS = 30_000;
 const MAX_NETWORK_ERRORS = 3; // consecutive speech-service failures before giving up
 
 function getRecognition(): (new () => Rec) | null {
@@ -65,6 +71,24 @@ function getRecognition(): (new () => Rec) | null {
 
 const isAndroid = () => /android/i.test(navigator.userAgent);
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+/**
+ * Joins the recogniser's results into one transcript. Some browsers (Android, Safari) repeat
+ * the whole phrase so far in each new result; a result that already contains the text so far
+ * replaces it instead of being appended.
+ */
+export function joinResults(results: RecResult) {
+  let text = "";
+  for (let i = 0; i < results.length; i++) {
+    const part = results[i][0].transcript.replace(/\s+/g, " ").trim();
+    if (!part) continue;
+    const lower = part.toLowerCase();
+    const sofar = text.toLowerCase();
+    if (!text || lower.startsWith(sofar)) text = part;
+    else if (!sofar.endsWith(lower)) text = `${text} ${part}`;
+  }
+  return text;
+}
 
 export function useVoiceSession(onUtterance: (text: string) => void) {
   const [supported, setSupported] = useState(false);
@@ -89,6 +113,9 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   const networkErrors = useRef(0);
   /** True until the first recogniser of this session has actually started. */
   const firstStartRef = useRef(false);
+  /** The browser only starts listening from a tap (iPhone): resume by asking for a press. */
+  const needsTapRef = useRef(false);
+  const captureRetries = useRef(0);
   const meterRef = useRef<{ stream: MediaStream; ctx: AudioContext; raf: number } | null>(null);
   const onUtteranceRef = useRef(onUtterance);
   onUtteranceRef.current = onUtterance;
@@ -187,9 +214,23 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     [stopMeter],
   );
 
-  const listen = useCallback(() => {
+  /** Asks for a tap instead of restarting by itself (from now on in this session). */
+  const needTap = useCallback((why: string) => {
+    if (!needsTapRef.current) {
+      needsTapRef.current = true;
+      debugSet({ recognitionMode: "napautus – selain ei salli kuuntelun automaattista jatkamista" });
+      debugError("Puheentunnistus", `automaattinen uudelleenkäynnistys estetty (${why}) → mikkiä painetaan vastatessa`);
+    }
+    clear(startTimer);
+    killRec();
+    debugSet({ recognitionLast: "odottaa mikin painallusta" });
+    setState("tap");
+  }, []);
+
+  const listen = useCallback((fromTap = false) => {
     const SR = getRecognition();
     if (!SR || !activeRef.current || pausedRef.current || recRef.current) return;
+    if (needsTapRef.current && !fromTap) return setState("tap");
 
     // Guard against a browser that ends sessions instantly: back off instead of spinning.
     const now = Date.now();
@@ -201,6 +242,8 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       return;
     }
 
+    // iOS: leave the loudspeaker-only "playback" mode so the microphone can open.
+    setAudioSession("auto");
     const rec = new SR();
     rec.lang = "fi-FI";
     rec.continuous = !isAndroid(); // Android repeats words in continuous mode
@@ -234,16 +277,24 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       endTimer.current = setTimeout(() => commit(reason), ms);
     };
 
-    // If the browser accepts start() but never actually starts listening, say so.
+    // If the browser accepts start() but never actually starts listening, say so –
+    // unless listening already worked and only a restart without a tap is refused.
+    const first = firstStartRef.current;
+    const limit = first ? FIRST_START_TIMEOUT_MS : START_TIMEOUT_MS;
     clear(startTimer);
     startTimer.current = setTimeout(() => {
-      if (recRef.current === rec && activeRef.current) fail(makeIssue("start_timeout", detectPlatform(), "onstart puuttui 7 s"));
-    }, START_TIMEOUT_MS);
+      if (recRef.current !== rec || !activeRef.current) return;
+      if (!first && !fromTap) return needTap(`onstart puuttui ${limit / 1000} s`);
+      fail(makeIssue("start_timeout", detectPlatform(), `onstart puuttui ${limit / 1000} s`));
+    }, limit);
+    debugSet({ recognitionLast: `start() ${fromTap ? "napautuksesta" : "automaattisesti"}` });
 
     rec.onstart = () => {
       if (recRef.current !== rec) return;
       clear(startTimer);
       firstStartRef.current = false;
+      captureRetries.current = 0;
+      debugSet({ recognitionLast: "kuuntelee (onstart)" });
       setState((s) => (s === "hearing" ? s : "listening"));
     };
     const detected = (ev: string) => {
@@ -264,9 +315,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     };
     rec.onresult = (e) => {
       if (handedOver || pausedRef.current) return;
-      let text = "";
-      for (let i = 0; i < e.results.length; i++) text += ` ${e.results[i][0].transcript}`;
-      text = text.replace(/\s+/g, " ").trim();
+      const text = joinResults(e.results);
       if (!text) return;
       if (!textRef.current) {
         newTurn();
@@ -284,6 +333,17 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     };
     rec.onerror = (e) => {
       if (recRef.current !== rec) return;
+      debugSet({ recognitionLast: `virhe: ${e.error}` });
+      if (e.error !== "no-speech" && e.error !== "aborted") debugError("Puheentunnistus", e.error);
+      // Listening already worked in this session: a refused restart without a tap is not a
+      // permission problem – iPhone simply wants a press of the mic.
+      if (!first && !fromTap && (e.error === "not-allowed" || e.error === "service-not-allowed")) return needTap(e.error);
+      // The mic may still be held for a moment by the previous recogniser or Lumi's voice.
+      if (!first && e.error === "audio-capture" && captureRetries.current++ < 2) {
+        killRec();
+        resumeTimer.current = setTimeout(() => listen(fromTap), 800);
+        return;
+      }
       if (FATAL.has(e.error)) {
         // Stop at once; work out the precise cause (permission, browser block, busy mic…) meanwhile.
         activeRef.current = false;
@@ -300,10 +360,11 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     rec.onend = () => {
       if (recRef.current !== rec) return;
       vlog("   onend", { text: textRef.current, handedOver });
+      debugSet({ recognitionLast: "päättyi (onend)" });
       recRef.current = null;
       // Android ends the session right after the last result: that is the child's turn.
       if (textRef.current) return commit("onend");
-      if (activeRef.current && !pausedRef.current) resumeTimer.current = setTimeout(listen, 250);
+      if (activeRef.current && !pausedRef.current) resumeTimer.current = setTimeout(() => listen(), 250);
     };
 
     try {
@@ -311,11 +372,14 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     } catch (err) {
       recRef.current = null;
       clear(startTimer);
+      const name = (err as Error)?.name ?? String(err);
+      debugError("Puheentunnistus", `start() heitti ${name}`);
       // Failing on the very first start means recognition cannot run here at all.
-      if (firstStartRef.current) return fail(makeIssue("start_timeout", detectPlatform(), `start(): ${(err as Error)?.name ?? err}`));
-      resumeTimer.current = setTimeout(listen, 800);
+      if (first) return fail(makeIssue("start_timeout", detectPlatform(), `start(): ${name}`));
+      if (!fromTap && name === "NotAllowedError") return needTap(`start(): ${name}`);
+      resumeTimer.current = setTimeout(() => listen(fromTap), 800);
     }
-  }, [armIdle, fail]);
+  }, [armIdle, fail, needTap]);
 
   /** The child presses the mic once to start talking with Lumi. */
   const start = useCallback(() => {
@@ -328,13 +392,26 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     restarts.current = [];
     networkErrors.current = 0;
     firstStartRef.current = true;
+    needsTapRef.current = false;
+    captureRetries.current = 0;
+    debugSet({ recognitionMode: "jatkuva – kuuntelu jatkuu itsestään Lumin jälkeen" });
     setIssue(null);
     setNotice(null);
     setState("starting");
     armIdle();
     startMeter();
-    listen();
+    listen(true);
   }, [armIdle, fail, listen, startMeter]);
+
+  /** In "tap" mode: the child pressed the mic to answer. Runs inside the tap, as iPhone requires. */
+  const tapToTalk = useCallback(() => {
+    if (!activeRef.current) return;
+    clear(resumeTimer);
+    pausedRef.current = false;
+    setState("starting");
+    armIdle();
+    listen(true);
+  }, [armIdle, listen]);
 
   /** Lumi is thinking or speaking: stop recognising so she never hears herself. */
   const pause = useCallback(() => {
@@ -355,8 +432,9 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     resumeTimer.current = setTimeout(() => {
       if (!activeRef.current) return;
       pausedRef.current = false;
-      setState("listening");
       armIdle();
+      if (needsTapRef.current) return setState("tap");
+      setState("listening");
       listen();
     }, RESUME_DELAY_MS);
   }, [armIdle, listen]);
@@ -417,6 +495,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     issue,
     notice,
     start,
+    tapToTalk,
     pause,
     resume,
     sendNow,

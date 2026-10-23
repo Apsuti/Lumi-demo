@@ -15,27 +15,47 @@ type Voice = {
   notice: string | null;
 };
 
-/** One press starts the spoken conversation; pressing again ends it. Calm colours, no alarm-red. */
-export function MicButton({ voice, disabled, big, onStart, onEnd }: { voice: Voice; disabled: boolean; big?: boolean; onStart: () => void; onEnd: () => void }) {
+/**
+ * One press starts the spoken conversation; pressing again ends it. Calm colours, no alarm-red.
+ * In "tap" mode (iPhone listens only after a tap) a press starts listening for the answer.
+ */
+export function MicButton({
+  voice,
+  disabled,
+  big,
+  onStart,
+  onEnd,
+  onTap,
+}: {
+  voice: Voice;
+  disabled: boolean;
+  big?: boolean;
+  onStart: () => void;
+  onEnd: () => void;
+  onTap: () => void;
+}) {
   const on = voice.active;
+  const tap = voice.state === "tap";
   const size = big ? "h-20 w-20" : "h-11 w-11";
   return (
     <button
       type="button"
-      onClick={on ? onEnd : onStart}
+      onClick={tap ? onTap : on ? onEnd : onStart}
       disabled={disabled && !on}
-      aria-pressed={on}
-      aria-label={on ? "Lopeta puhekeskustelu" : "Aloita puhekeskustelu"}
-      title={on ? "Lopeta puhekeskustelu" : "Puhu Lumille"}
+      aria-pressed={on && !tap}
+      aria-label={tap ? "Puhu – paina ja vastaa" : on ? "Lopeta puhekeskustelu" : "Aloita puhekeskustelu"}
+      title={tap ? "Paina ja puhu" : on ? "Lopeta puhekeskustelu" : "Puhu Lumille"}
       className={`relative grid ${size} shrink-0 place-items-center rounded-full transition disabled:opacity-30 ${
-        on
+        tap
+          ? "bg-gradient-to-br from-sky-500 to-lilac-500 text-white shadow-lift"
+          : on
           ? "bg-mint-400 text-white shadow-[0_0_0_4px_rgba(92,201,160,0.25)]"
           : big
             ? "bg-gradient-to-br from-sky-500 to-lilac-500 text-white shadow-lift hover:scale-105"
             : "bg-lilac-100 text-lilac-600 hover:bg-lilac-200"
       }`}
     >
-      {on && voice.state !== "paused" && (
+      {on && voice.state !== "paused" && !tap && (
         <motion.span
           className="absolute inset-0 rounded-full ring-4 ring-mint-400/50"
           animate={{ scale: [1, 1.12, 1], opacity: [0.5, 0.15, 0.5] }}
@@ -65,12 +85,14 @@ type Props = {
   onStopSpeaking: () => void;
   onSendNow: () => void;
   onEnd: () => void;
+  onTap: () => void;
   onRestart: () => void;
   onDismiss: () => void;
+  onDiagnostics: () => void;
 };
 
 /** Always tells the child, calmly, whether the mic is listening, paused, or off. */
-export function VoicePanel({ voice, lumi, onStopSpeaking, onSendNow, onEnd, onRestart, onDismiss }: Props) {
+export function VoicePanel({ voice, lumi, onStopSpeaking, onSendNow, onEnd, onTap, onRestart, onDismiss, onDiagnostics }: Props) {
   const waiting = voice.state === "listening" || voice.state === "starting";
   const line = usePatientLine(waiting);
 
@@ -79,7 +101,7 @@ export function VoicePanel({ voice, lumi, onStopSpeaking, onSendNow, onEnd, onRe
 
   if (voice.state === "error" && voice.issue) {
     key = "error";
-    content = <IssuePanel issue={voice.issue} onRestart={onRestart} onDismiss={onDismiss} />;
+    content = <IssuePanel issue={voice.issue} onRestart={onRestart} onDismiss={onDismiss} onDiagnostics={onDiagnostics} />;
   } else if (!voice.active && voice.notice) {
     key = "notice";
     content = (
@@ -120,6 +142,22 @@ export function VoicePanel({ voice, lumi, onStopSpeaking, onSendNow, onEnd, onRe
         )}
       </div>
     );
+  } else if (voice.state === "tap") {
+    key = "tap";
+    content = (
+      <div className="flex items-center gap-3 rounded-3xl border border-sky-200 bg-sky-50/80 p-3 pl-4" role="status" aria-live="polite">
+        <div className="min-w-0 flex-1">
+          <div className="font-display text-[15px] font-extrabold text-ink">Sinun vuorosi</div>
+          <div className="text-xs text-ink-mute">Paina mikkiä, kun haluat vastata. Viesti lähtee, kun lopetat puhumisen.</div>
+        </div>
+        <button onClick={onTap} className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-br from-sky-500 to-lilac-500 px-4 py-2.5 text-sm font-bold text-white shadow-soft">
+          <Mic className="h-4 w-4" /> Puhu
+        </button>
+        <button onClick={onEnd} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-ink-mute ring-1 ring-ink/10" aria-label="Lopeta puhekeskustelu">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    );
   } else if (voice.active) {
     const hearing = voice.state === "hearing";
     key = "listening";
@@ -146,6 +184,8 @@ export function VoicePanel({ voice, lumi, onStopSpeaking, onSendNow, onEnd, onRe
 
         {hearing && voice.transcript ? (
           <div className="mt-3 rounded-2xl bg-white px-4 py-3 text-lg font-semibold leading-snug text-ink">{voice.transcript}</div>
+        ) : voice.state === "starting" ? (
+          <p className="mt-1 text-sm text-ink-soft">Jos laite kysyy lupaa mikrofoniin tai puheentunnistukseen, valitse <b>Salli</b>.</p>
         ) : (
           <p className="mt-1 text-sm text-ink-soft">Kun alat puhua, kuulen sinut. Viesti lähtee Lumille, kun lopetat puhumisen.</p>
         )}
@@ -191,7 +231,7 @@ function BreathingDot({ hearing, level }: { hearing: boolean; level: number }) {
 }
 
 /** Exact cause, how to fix it on this device, and an on-demand full check. */
-function IssuePanel({ issue, onRestart, onDismiss }: { issue: MicIssue; onRestart: () => void; onDismiss: () => void }) {
+function IssuePanel({ issue, onRestart, onDismiss, onDiagnostics }: { issue: MicIssue; onRestart: () => void; onDismiss: () => void; onDiagnostics: () => void }) {
   const [checks, setChecks] = useState<MicCheck[] | null>(null);
   const [checking, setChecking] = useState(false);
 
@@ -241,6 +281,9 @@ function IssuePanel({ issue, onRestart, onDismiss }: { issue: MicIssue; onRestar
         </button>
         <button onClick={check} className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-bold text-ink-soft ring-1 ring-ink/10">
           {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="h-3.5 w-3.5" />} Tarkista mikrofoni
+        </button>
+        <button onClick={onDiagnostics} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-ink-soft ring-1 ring-ink/10">
+          Laitetiedot
         </button>
         <button onClick={onDismiss} className="rounded-full px-3 py-2 text-sm font-bold text-ink-mute">
           Kirjoitan mieluummin

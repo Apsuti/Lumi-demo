@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MAX_TTS_CHARS, cleanForSpeech } from "@/lib/lumi/voice";
+import { appleWebKit, setAudioSession } from "./micDiagnostics";
+import { debugError, debugEvent, debugSet } from "./voiceLog";
 
 const LANG = "fi-FI";
 const AUTO_KEY = "lumi.autoSpeak";
@@ -9,7 +11,9 @@ const AUTO_KEY = "lumi.autoSpeak";
 /**
  * A short silent WAV. Playing it inside a tap "unlocks" the audio element on iOS,
  * so Lumi's later replies (which arrive without a tap) are allowed to play.
+ * iOS only counts touchend/click/keydown as such a tap – not pointerdown/touchstart.
  */
+const GESTURES = ["touchend", "click", "keydown"] as const;
 function silentWav() {
   const samples = 800; // 0.1 s at 8 kHz, 8-bit mono
   const buf = new DataView(new ArrayBuffer(44 + samples));
@@ -63,6 +67,8 @@ export function useSpeech() {
   const [browserVoicesLoaded, setBrowserVoicesLoaded] = useState(false);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [autoSpeak, setAutoSpeakState] = useState(false);
+  /** The browser refused to play Lumi's voice without a tap (iOS autoplay rule). */
+  const [blocked, setBlocked] = useState(false);
   const runRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const unlockedRef = useRef(false);
@@ -75,28 +81,64 @@ export function useSpeech() {
     } catch {
       /* storage unavailable – default off */
     }
+    // Created at once so that the very first tap can unlock it (before the status check returns).
+    audioRef.current ??= new Audio();
 
     // Natural voice (ElevenLabs, always the same voice) when the server has a key.
     fetch("/api/tts?status=1")
       .then((r) => r.json())
       .then((d: { configured?: boolean }) => {
-        if (!d.configured) return;
-        audioRef.current ??= new Audio();
-        setEngine("elevenlabs");
+        debugSet({ ttsConfigured: Boolean(d.configured) });
+        if (d.configured) setEngine("elevenlabs");
       })
-      .catch(() => {});
+      .catch(() => debugSet({ ttsConfigured: false, ttsLast: "tilan tarkistus epäonnistui" }));
 
-    // Unlock audio playback on the first tap (needed on iOS/Safari).
+    // Unlock audio playback inside a tap (iOS/Safari). Re-armed whenever playback gets blocked.
+    let synthUnlocked = false;
+    let contextProbed = false;
     const unlock = () => {
       const a = audioRef.current;
       if (!a || unlockedRef.current) return;
       unlockedRef.current = true;
-      a.src = silentWav();
-      a.play().catch(() => (unlockedRef.current = false));
+      if (a.paused) {
+        a.src = silentWav();
+        a.play()
+          .then(() => {
+            debugSet({ audioUnlock: "unlocked" });
+            setBlocked(false);
+          })
+          .catch((e: DOMException) => {
+            unlockedRef.current = false;
+            debugSet({ audioUnlock: "blocked" });
+            debugError("Äänen avaus", `${e?.name ?? "virhe"} ${e?.message ?? ""}`.trim());
+          });
+      }
+      // iOS also lets speechSynthesis talk only after one utterance was started from a tap.
+      if (hasBrowser && !synthUnlocked) {
+        synthUnlocked = true;
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      }
+      if (!contextProbed) {
+        contextProbed = true;
+        const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AC) debugSet({ audioContext: "ei tuettu" });
+        else {
+          const ctx = new AC();
+          const before = ctx.state;
+          ctx
+            .resume()
+            .then(() => debugSet({ audioContext: `${ctx.state} (ennen napautusta: ${before})` }))
+            .catch((e: DOMException) => debugSet({ audioContext: `${ctx.state} – ${e?.name}` }))
+            .finally(() => setTimeout(() => ctx.close().catch(() => {}), 300));
+        }
+      }
     };
-    window.addEventListener("pointerdown", unlock, true);
+    GESTURES.forEach((g) => window.addEventListener(g, unlock, true));
+    const removeUnlock = () => GESTURES.forEach((g) => window.removeEventListener(g, unlock, true));
 
-    if (!hasBrowser) return () => window.removeEventListener("pointerdown", unlock, true);
+    if (!hasBrowser) return removeUnlock;
     const load = () => {
       const list = window.speechSynthesis.getVoices();
       if (list.length) {
@@ -107,7 +149,7 @@ export function useSpeech() {
     load();
     window.speechSynthesis.addEventListener("voiceschanged", load);
     return () => {
-      window.removeEventListener("pointerdown", unlock, true);
+      removeUnlock();
       window.speechSynthesis.removeEventListener("voiceschanged", load);
       window.speechSynthesis.cancel();
       audioRef.current?.pause();
@@ -138,6 +180,7 @@ export function useSpeech() {
       new Promise<void>((resolve) => {
         if (!("speechSynthesis" in window)) return resolve();
         const synth = window.speechSynthesis;
+        debugSet({ voiceUsed: `selaimen oma ääni${browserVoice ? ` (${browserVoice.name})` : " (ei suomenkielistä ääntä)"}` });
         const parts = splitSentences(text);
         if (!parts.length) return resolve();
         let finished = false;
@@ -162,7 +205,11 @@ export function useSpeech() {
           if (browserVoice) u.voice = browserVoice;
           u.rate = 1.12; // natural conversational pace, matching the ElevenLabs voice
           u.pitch = 1.1;
-          if (i === parts.length - 1) u.onend = u.onerror = finish;
+          u.onerror = (e) => {
+            if (e.error !== "interrupted" && e.error !== "canceled") debugError("Selaimen ääni", e.error);
+            if (i === parts.length - 1) finish();
+          };
+          if (i === parts.length - 1) u.onend = finish;
           synth.speak(u);
         });
       }),
@@ -183,12 +230,29 @@ export function useSpeech() {
           resolve(ok);
         };
         audio.onended = () => settle(true);
-        audio.onerror = () => settle(false);
+        audio.onerror = () => {
+          const err = audio.error;
+          debugError("Äänitiedosto", `MediaError ${err?.code ?? "?"} ${err?.message ?? ""}`.trim());
+          settle(false);
+        };
         audio.src = src;
-        audio.play().catch((e: DOMException) => {
-          // Autoplay blocked (no tap yet on iOS) or audio failed.
-          if (e?.name !== "AbortError") settle(false);
-        });
+        audio
+          .play()
+          .then(() => {
+            debugSet({ audioUnlock: "unlocked", voiceUsed: "ElevenLabs (Petteri)", ...(src.startsWith("/api/tts") ? { ttsLast: "OK – striimattu suoraan" } : {}) });
+            setBlocked(false);
+          })
+          .catch((e: DOMException) => {
+            if (e?.name === "AbortError") return;
+            // Autoplay blocked: iOS wants a tap first. The next tap anywhere unlocks playback again.
+            if (e?.name === "NotAllowedError") {
+              unlockedRef.current = false;
+              setBlocked(true);
+              debugSet({ audioUnlock: "blocked" });
+            }
+            debugError("Äänen toisto", `${e?.name ?? "virhe"} ${e?.message ?? ""}`.trim());
+            settle(false);
+          });
       }),
     [],
   );
@@ -212,6 +276,9 @@ export function useSpeech() {
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       const useEleven = engine === "elevenlabs" && !!audioRef.current;
+      // Safari (all iOS browsers) cannot play a streamed response without range support, so
+      // there the first sentence is downloaded whole like the rest – it is short, so this is quick.
+      const streamFirst = !appleWebKit();
 
       type Chunk = { text: string; audio?: Promise<string | null> };
       const queue: Chunk[] = [];
@@ -231,16 +298,28 @@ export function useSpeech() {
       };
 
       // Buffer a later sentence in the background so it can play the moment the previous ends.
-      const prefetch = (url: string) =>
-        fetch(url, { signal: ctrl.signal })
-          .then((r) => (r.ok ? r.blob() : null))
+      const prefetch = (url: string) => {
+        const started = performance.now();
+        return fetch(url, { signal: ctrl.signal })
+          .then(async (r) => {
+            if (r.ok) return r.blob();
+            const body = (await r.json().catch(() => null)) as { error?: string } | null;
+            debugSet({ ttsLast: `virhe ${r.status}${body?.error ? ` (${body.error})` : ""}` });
+            debugError("ElevenLabs", `HTTP ${r.status} ${body?.error ?? ""}`.trim());
+            return null;
+          })
           .then((b) => {
             if (!b || !live()) return null;
+            debugSet({ ttsLast: `OK – ${Math.round(performance.now() - started)} ms, ${Math.round(b.size / 1024)} kt` });
             const u = URL.createObjectURL(b);
             urlsRef.current.push(u);
             return u;
           })
-          .catch(() => null);
+          .catch((e: Error) => {
+            if (e?.name !== "AbortError") debugError("ElevenLabs", `verkkovirhe: ${e?.message ?? e}`);
+            return null;
+          });
+      };
 
       const finish = () => {
         if (finished || !live()) return;
@@ -261,6 +340,8 @@ export function useSpeech() {
         playing = true;
         if (!started) {
           started = true;
+          // iOS: make sure the reply plays from the loudspeaker even right after the mic was in use.
+          setAudioSession("playback");
           setSpeakingId(id);
           console.info(`[Lumi viive] puhe alkaa ${Math.round(performance.now() - t0)} ms vastauksen alusta`);
         }
@@ -269,7 +350,10 @@ export function useSpeech() {
           const src = chunk.audio ? await chunk.audio : ttsUrl(chunk.text, "");
           if (src && live()) ok = await playAudio(src, run);
         }
-        if (!ok && live()) await speakWithBrowser(chunk.text, run);
+        if (!ok && live()) {
+          if (useEleven) debugEvent("ElevenLabs-ääni ei soinut → selaimen oma ääni");
+          await speakWithBrowser(chunk.text, run);
+        }
         playing = false;
         if (live()) pump();
       };
@@ -279,7 +363,7 @@ export function useSpeech() {
         if (!text) return;
         const chunk: Chunk = { text };
         // The first sentence streams directly (no wait for the whole file); later ones are buffered.
-        if (useEleven) chunk.audio = chunkCount === 0 ? Promise.resolve(ttsUrl(text, "")) : prefetch(ttsUrl(text, prev));
+        if (useEleven) chunk.audio = chunkCount === 0 && streamFirst ? Promise.resolve(ttsUrl(text, "")) : prefetch(ttsUrl(text, prev));
         prev = prev ? `${prev} ${text}` : text;
         chunkCount++;
         queue.push(chunk);
@@ -373,7 +457,10 @@ export function useSpeech() {
     engine,
     /** False when only the browser voice is available and it has no Finnish voice. */
     hasFinnishVoice: engine === "elevenlabs" || !browserVoicesLoaded || browserVoice !== null,
+    browserVoiceName: browserVoice?.name ?? null,
     speakingId,
+    /** True when iOS blocked Lumi's voice; any tap unlocks it again. */
+    blocked,
     speak,
     beginStream,
     stop,

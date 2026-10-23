@@ -33,11 +33,19 @@ export type Platform = {
   os: "ios" | "android" | "other";
   browser: "safari" | "chrome" | "firefox" | "samsung" | "edge" | "inapp" | "other";
   label: string;
+  /** e.g. "iOS 17.5", "Android 14", "macOS" */
+  osLabel: string;
+  /** e.g. "Safari 17.5", "Chrome 126" */
+  browserLabel: string;
+  device: string;
 };
+
+const BROWSER_NAMES = { safari: "Safari", chrome: "Chrome", firefox: "Firefox", samsung: "Samsung Internet", edge: "Edge", inapp: "sovelluksen sisäinen selain", other: "tuntematon selain" };
 
 export function detectPlatform(): Platform {
   const ua = navigator.userAgent;
-  const ios = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const ipadDesktop = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1; // iPadOS asks for the desktop site
+  const ios = /iphone|ipad|ipod/i.test(ua) || ipadDesktop;
   const android = /android/i.test(ua);
   const os = ios ? "ios" : android ? "android" : "other";
   let browser: Platform["browser"] = "other";
@@ -47,9 +55,70 @@ export function detectPlatform(): Platform {
   else if (/Firefox|FxiOS/i.test(ua)) browser = "firefox";
   else if (/Chrome|CriOS/i.test(ua)) browser = "chrome";
   else if (/Safari/i.test(ua)) browser = "safari";
-  const names = { safari: "Safari", chrome: "Chrome", firefox: "Firefox", samsung: "Samsung Internet", edge: "Edge", inapp: "sovelluksen sisäinen selain", other: "tuntematon selain" };
   const osName = { ios: "iPhone/iPad", android: "Android", other: "tietokone" }[os];
-  return { os, browser, label: `${names[browser]} · ${osName}` };
+
+  const iosVersion = ua.match(/OS (\d+)[_.](\d+)(?:[_.](\d+))? like Mac OS X/)?.slice(1).filter(Boolean).join(".") ?? (ipadDesktop ? ua.match(/Version\/([\d.]+)/)?.[1] : undefined);
+  const osLabel = ios
+    ? `iOS ${iosVersion ?? "(versio tuntematon)"}`
+    : android
+      ? `Android ${ua.match(/Android ([\d.]+)/)?.[1] ?? ""}`.trim()
+      : /Mac OS X/.test(ua)
+        ? "macOS"
+        : /Windows/.test(ua)
+          ? "Windows"
+          : /CrOS/.test(ua)
+            ? "ChromeOS"
+            : /Linux/.test(ua)
+              ? "Linux"
+              : "tuntematon";
+  const version =
+    {
+      safari: ua.match(/Version\/([\d.]+)/)?.[1],
+      chrome: ua.match(/(?:Chrome|CriOS)\/(\d+)/)?.[1],
+      firefox: ua.match(/(?:Firefox|FxiOS)\/(\d+)/)?.[1],
+      samsung: ua.match(/SamsungBrowser\/([\d.]+)/)?.[1],
+      edge: ua.match(/Edg(?:e|A|iOS)?\/(\d+)/)?.[1],
+      inapp: undefined,
+      other: undefined,
+    }[browser] ?? "";
+  const device = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) || ipadDesktop ? "iPad" : android ? "Android-laite" : "tietokone";
+  // Every browser on iOS (Chrome, Firefox, Edge…) runs on Safari's engine.
+  const engineNote = ios && browser !== "safari" ? " (Safarin moottori)" : "";
+  return {
+    os,
+    browser,
+    label: `${BROWSER_NAMES[browser]} · ${osName}`,
+    osLabel,
+    browserLabel: `${BROWSER_NAMES[browser]} ${version}`.trim() + engineNote,
+    device,
+  };
+}
+
+/** Safari's engine: all iOS browsers and desktop Safari share its media and autoplay rules. */
+export function appleWebKit() {
+  const p = detectPlatform();
+  return p.os === "ios" || p.browser === "safari";
+}
+
+type AudioSessionType = "auto" | "playback" | "play-and-record";
+/**
+ * iOS 16.4+: tells the phone how the page uses audio. "playback" routes Lumi's voice to the
+ * loudspeaker at full volume (after the mic was used, iOS may otherwise keep the quiet
+ * earpiece route) and plays even with the ring/silent switch on; "auto" lets the mic work.
+ */
+export function setAudioSession(type: AudioSessionType) {
+  const nav = navigator as Navigator & { audioSession?: { type: string } };
+  if (!nav.audioSession) return;
+  try {
+    if (nav.audioSession.type !== type) nav.audioSession.type = type;
+  } catch {
+    /* not allowed right now – keep the current session */
+  }
+}
+
+export function audioSessionType() {
+  const nav = navigator as Navigator & { audioSession?: { type: string } };
+  return nav.audioSession ? nav.audioSession.type : "ei tuettu (vaatii iOS 16.4+)";
 }
 
 function hasMediaDevices() {
@@ -105,8 +174,13 @@ export function makeIssue(code: IssueCode, p: Platform, technical?: string): Mic
       detail:
         p.browser === "firefox"
           ? "Firefox ei sisällä puheentunnistusta (Web Speech API)."
-          : `${p.label} ei tarjoa puheentunnistusta (Web Speech API).`,
-      steps: [`Avaa Lumi ${BEST_BROWSER(p)}.`, "Voit myös kirjoittaa viestit – Lumi vastaa silti ääneen."],
+          : p.os === "ios" && p.browser === "safari"
+            ? `Safarin puheentunnistus vaatii iOS 14.5:n tai uudemman (tässä ${p.osLabel}).`
+            : `${p.label} ei tarjoa puheentunnistusta (Web Speech API).`,
+      steps:
+        p.os === "ios" && p.browser === "safari"
+          ? ["Päivitä iPhone: Asetukset → Yleiset → Ohjelmiston päivitys.", "Voit myös kirjoittaa viestit – Lumi vastaa silti ääneen."]
+          : [`Avaa Lumi ${BEST_BROWSER(p)}.`, "Voit myös kirjoittaa viestit – Lumi vastaa silti ääneen."],
     },
     no_media_devices: {
       title: "Selain ei pääse mikrofoniin",
@@ -147,7 +221,15 @@ export function makeIssue(code: IssueCode, p: Platform, technical?: string): Mic
     start_timeout: {
       title: "Puheentunnistus ei käynnistynyt",
       detail: "Selain hyväksyi pyynnön, mutta kuuntelu ei alkanut.",
-      steps: ["Päivitä sivu.", "Sulje muut sovellukset, jotka voivat käyttää mikrofonia.", `Jos ongelma jatkuu, avaa Lumi ${BEST_BROWSER(p)}.`],
+      steps:
+        p.os === "ios"
+          ? [
+              "Jos puhelin kysyi lupaa mikrofoniin tai puheentunnistukseen, valitse Salli.",
+              "Tarkista Asetukset → Yleiset → Näppäimistö → Ota sanelu käyttöön (päällä).",
+              "Tarkista Asetukset → Safari → Mikrofoni → Kysy tai Salli.",
+              "Päivitä sivu ja paina mikkiä uudelleen.",
+            ]
+          : ["Päivitä sivu.", "Sulje muut sovellukset, jotka voivat käyttää mikrofonia.", `Jos ongelma jatkuu, avaa Lumi ${BEST_BROWSER(p)}.`],
     },
     network: {
       title: "Puheentunnistuspalveluun ei saada yhteyttä",
