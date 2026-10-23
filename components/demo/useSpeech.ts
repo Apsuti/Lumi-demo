@@ -64,7 +64,6 @@ function pickBrowserVoice(voices: SpeechSynthesisVoice[]) {
 export function useSpeech() {
   const [engine, setEngine] = useState<Engine>("none");
   const [browserVoice, setBrowserVoice] = useState<SpeechSynthesisVoice | null>(null);
-  const [browserVoicesLoaded, setBrowserVoicesLoaded] = useState(false);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   const [autoSpeak, setAutoSpeakState] = useState(false);
   /** The browser refused to play Lumi's voice without a tap (iOS autoplay rule). */
@@ -143,7 +142,6 @@ export function useSpeech() {
       const list = window.speechSynthesis.getVoices();
       if (list.length) {
         setBrowserVoice(pickBrowserVoice(list));
-        setBrowserVoicesLoaded(true);
       }
     };
     load();
@@ -455,8 +453,6 @@ export function useSpeech() {
   return {
     supported: engine !== "none",
     engine,
-    /** False when only the browser voice is available and it has no Finnish voice. */
-    hasFinnishVoice: engine === "elevenlabs" || !browserVoicesLoaded || browserVoice !== null,
     browserVoiceName: browserVoice?.name ?? null,
     speakingId,
     /** True when iOS blocked Lumi's voice; any tap unlocks it again. */

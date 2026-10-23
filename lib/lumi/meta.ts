@@ -1,10 +1,9 @@
 export type LumiMood = "curious" | "think" | "happy" | "celebrate";
-/** How much help Lumi gave in a reply. Falling support = growing independence. */
+/** How much help Lumi gave in a reply – Lumi's own check that support is fading. */
 export type LumiSupport = "high" | "medium" | "low" | "none";
 
 export type LumiMeta = {
   mood: LumiMood;
-  technique: string;
   support: LumiSupport;
   celebrate: boolean;
   /** Lumi stepped back: the child carries on alone. */
@@ -20,8 +19,7 @@ export function normalizeMeta(raw: unknown): LumiMeta {
   const mood = MOODS.includes(o.mood as LumiMood) ? (o.mood as LumiMood) : "curious";
   const handoff = o.handoff === true;
   const support = SUPPORTS.includes(o.support as LumiSupport) ? (o.support as LumiSupport) : handoff ? "none" : "medium";
-  const technique = typeof o.technique === "string" && o.technique.trim() ? o.technique.trim().slice(0, 60) : "Ohjaa ajattelemaan";
-  return { mood, support, technique, celebrate: o.celebrate === true || mood === "celebrate", handoff };
+  return { mood, support, celebrate: o.celebrate === true || mood === "celebrate", handoff };
 }
 
 const OPEN = "<lumi>";

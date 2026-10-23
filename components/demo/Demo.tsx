@@ -1,10 +1,10 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Lightbulb, RotateCcw, SendHorizontal, Settings, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCcw, SendHorizontal, Settings, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
-import type { LumiMeta, LumiSupport } from "@/lib/lumi/meta";
+import type { LumiMeta } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
 import { vlog } from "./voiceLog";
@@ -75,8 +75,6 @@ export default function Demo() {
   const [mood, setMood] = useState<LumiMood>("greet");
   const [burst, setBurst] = useState(0);
   const [meta, setMeta] = useState<LumiMeta | null>(null);
-  /** Support level of each Lumi reply – falling support shows the child's growing independence. */
-  const [trail, setTrail] = useState<LumiSupport[]>([]);
   const [draft, setDraft] = useState("");
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [attachment, setAttachment] = useState<PreparedImage | null>(null);
@@ -163,7 +161,6 @@ export default function Demo() {
       onMeta: (m) => {
         gotMeta = m;
         setMeta(m);
-        setTrail((t) => [...t, m.support]);
         patchMsg(lumiId, { meta: m });
         setMood(m.celebrate ? "celebrate" : m.mood);
         if (m.celebrate) setBurst((b) => b + 1);
@@ -319,7 +316,6 @@ export default function Demo() {
     speech.stop();
     voice.end();
     setMsgs([]);
-    setTrail([]);
     setMeta(null);
     setBusy(false);
     setWaiting(false);
@@ -471,8 +467,8 @@ export default function Demo() {
           )}
 
           {phase === "chat" && (
-            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="grid h-full grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="flex min-h-0 min-w-0 flex-col">
+            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex h-full flex-col">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <ChatHeader
                   mood={mood}
                   burst={burst}
@@ -519,9 +515,6 @@ export default function Demo() {
                 {composer("Kirjoita viesti…")}
               </div>
 
-              <aside className="hidden min-h-0 flex-col justify-center gap-4 overflow-y-auto border-l border-ink/[0.06] bg-gradient-to-b from-white/60 to-lilac-50/60 p-5 lg:flex">
-                <SidePanel mood={mood} burst={burst} talking={busy && !waiting} speaking={lumiSpeaking} meta={meta} trail={trail} noFinnishVoice={speech.supported && !speech.hasFinnishVoice} />
-              </aside>
             </motion.div>
           )}
         </AnimatePresence>
@@ -662,7 +655,7 @@ function ChatHeader({
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <div className="lg:hidden">
+        <div>
           <LumiCharacter size={40} mood={mood} burstKey={burst} speaking={speaking} float={false} />
         </div>
         <div className="min-w-0 flex-1">
@@ -858,86 +851,6 @@ function Composer({
 }
 
 /* ───────────────────────── Side panel ───────────────────────── */
-
-function SidePanel({
-  mood,
-  burst,
-  talking,
-  speaking,
-  meta,
-  trail,
-  noFinnishVoice,
-}: {
-  mood: LumiMood;
-  burst: number;
-  talking: boolean;
-  speaking: boolean;
-  meta: LumiMeta | null;
-  trail: LumiSupport[];
-  noFinnishVoice: boolean;
-}) {
-  return (
-    <>
-      <div className="flex flex-col items-center pt-2">
-        <LumiCharacter size={124} mood={mood} burstKey={burst} talking={talking} speaking={speaking} />
-      </div>
-
-      <Independence trail={trail} />
-
-      {noFinnishVoice && (
-        <p className="rounded-2xl bg-peach-100/70 px-3 py-2 text-[11px] leading-relaxed text-ink-soft">
-          Laitteelta ei löytynyt suomenkielistä puheääntä, joten ääntäminen voi kuulostaa oudolta. Suomen äänen voi lisätä
-          käyttöjärjestelmän kieliasetuksista.
-        </p>
-      )}
-
-      <details className="group rounded-2xl border border-ink/[0.06] bg-white/70 px-3 py-2 text-xs text-ink-mute">
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 font-bold">
-          <Lightbulb className="h-3.5 w-3.5 text-lilac-500" /> Aikuiselle: mitä Lumi tekee nyt
-        </summary>
-        <p className="mt-2 text-sm font-bold text-ink">{meta?.technique ?? "Ei vielä vastauksia."}</p>
-        <p className="mt-2 leading-relaxed">Vastaukset luo kielimalli (Anthropic Claude) Lumin pedagogisen ohjauksen mukaisesti. Tekoäly voi erehtyä.</p>
-      </details>
-    </>
-  );
-}
-
-const SUPPORT_LABEL: Record<LumiSupport, string> = {
-  high: "Lumi tukee paljon",
-  medium: "Lumi antaa vihjeitä",
-  low: "Teet jo melkein itse",
-  none: "Pärjäät omin voimin",
-};
-const SUPPORT_LEVEL: Record<LumiSupport, number> = { high: 1, medium: 2, low: 3, none: 4 };
-
-/**
- * Lumi's measure of success: how independent the child has become. Each bar is one of
- * Lumi's replies; the taller, the less help was needed.
- */
-function Independence({ trail }: { trail: LumiSupport[] }) {
-  if (!trail.length) return null;
-  const last = trail[trail.length - 1];
-  const shown = trail.slice(-12);
-  return (
-    <div className="rounded-3xl border border-ink/[0.06] bg-white/90 p-4 shadow-soft">
-      <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="font-display text-sm font-extrabold">Itsenäisyys</h3>
-        <span className="text-[11px] font-medium text-ink-mute">{SUPPORT_LABEL[last]}</span>
-      </div>
-      <div className="flex h-10 items-end gap-1" aria-label={`Itsenäisyys: ${SUPPORT_LABEL[last]}`}>
-        {shown.map((s, i) => (
-          <motion.span
-            key={trail.length - shown.length + i}
-            initial={{ height: 0 }}
-            animate={{ height: `${SUPPORT_LEVEL[s] * 25}%` }}
-            className={`flex-1 rounded-md ${s === "none" ? "bg-mint-400" : "bg-lilac-300"}`}
-          />
-        ))}
-      </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-ink-mute">Mitä korkeampi pylväs, sitä vähemmän apua tarvitsit. Lumin tavoite on, ettet tarvitse sitä.</p>
-    </div>
-  );
-}
 
 /* ───────────────────────── Speech output ───────────────────────── */
 

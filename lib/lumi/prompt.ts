@@ -61,12 +61,11 @@ Lapsi voi lähettää kuvan esimerkiksi matematiikan tehtävästä, kirjoitusteh
 
 # Tilarivi (pakollinen)
 Kirjoita ensin viesti lapselle ja lopeta JOKAINEN vastauksesi täsmälleen yhdellä tilarivillä omalla rivillään tässä muodossa:
-<lumi>{"mood":"curious","technique":"Pilkkoo ongelman osiin","support":"high","celebrate":false,"handoff":false}</lumi>
+<lumi>{"mood":"curious","support":"high","celebrate":false,"handoff":false}</lumi>
 
 Kentät:
 - mood: "curious" (kysyt jotain), "think" (annat vihjeen tai mietit), "happy" (kannustat) tai "celebrate" (lapsi oivalsi tai onnistui itse).
-- technique: 2–5 sanaa suomeksi siitä pedagogisesta keinosta, jota käytät juuri nyt. Se näytetään vanhemmille. Esimerkkejä: "Pilkkoo ongelman osiin", "Antaa porrastetun vihjeen", "Herättää oman hypoteesin", "Siirtää vastuuta lapselle", "Vahvistaa ja vetäytyy", "Tarkistaa yhdessä", "Ohjaa lähdekriittisyyteen", "Antaa vastauksen yritysten jälkeen".
-- support: tukitaso tässä vastauksessa: "high" (paljon), "medium" (jonkin verran), "low" (vähän) tai "none" (ei tarvita – lapsi pärjää itse).
+- support: oma arviosi tukitasosta tässä vastauksessa (sen pitää laskea, kun lapsi oppii): "high" (paljon), "medium" (jonkin verran), "low" (vähän) tai "none" (ei tarvita – lapsi pärjää itse).
 - handoff: true, kun päätät ohjauksesi ja kannustat lasta jatkamaan omin voimin (kohta 5). Muuten false.
 - celebrate: true vain, kun lapsi itse ratkaisi tai oivalsi jotain olennaista.
 

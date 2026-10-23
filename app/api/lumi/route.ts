@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * POST { messages: {role, content}[] } → text/event-stream
- *   event: meta   data: LumiMeta          (mood, technique, support, celebrate, handoff)
+ *   event: meta   data: LumiMeta          (mood, support, celebrate, handoff)
  *   event: delta  data: {"text": "..."}   (visible reply, streamed)
  *   event: done   data: {"stop_reason": "...", "model": "..."}
  *   event: error  data: {"message": "..."}
