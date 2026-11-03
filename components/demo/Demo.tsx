@@ -16,6 +16,7 @@ import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
 import { detectCommand, withoutCommand } from "../toy/commands";
 import { openMic, releaseMic } from "../toy/mic";
 import { requestMotionPermission, useTapWake } from "../toy/tapWake";
+import { useWakeLock } from "../toy/wakeLock";
 import { takePhoto } from "../toy/camera";
 import { SleepView, TapOverlay, ToyView } from "../toy/Toy";
 
@@ -421,6 +422,8 @@ export default function Demo() {
 
   // A tap on the toy wakes Lumi; only the motion sensor listens while she sleeps.
   useTapWake(sleeping, wake);
+  // Toy mode and sleep keep the screen on: a locked phone could not notice the tap.
+  useWakeLock(toy || sleeping);
 
   /** Why toy mode needs a touch right now (null: it doesn't). */
   const tapReason =

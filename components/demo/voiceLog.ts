@@ -42,6 +42,8 @@ export type DebugState = {
   recognitionLast: string;
   /** Waking by a tap on the toy: motion sensor permission and threshold. */
   motion: string;
+  /** Screen Wake Lock: keeps the screen on in toy mode so a tap can wake Lumi. */
+  wakeLock: string;
   lastError: string;
   events: string[];
 };
@@ -56,6 +58,7 @@ let state: DebugState = {
   recognitionMode: "–",
   recognitionLast: "–",
   motion: "ei vielä käytetty",
+  wakeLock: "ei käytössä",
   lastError: "ei virheitä",
   events: [],
 };

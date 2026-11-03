@@ -92,6 +92,7 @@ export function DiagnosticsPanel({
         { label: "Kuuntelutapa", value: debug.recognitionMode },
         { label: "Tunnistimen viimeisin tila", value: debug.recognitionLast },
         { label: "Herätys taputtamalla (liikeanturi)", value: debug.motion },
+        { label: "Näyttö pysyy päällä (Wake Lock)", value: debug.wakeLock, ok: debug.wakeLock.startsWith("päällä") ? true : debug.wakeLock.startsWith("ei ") ? false : null },
       ],
     },
     {
