@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MAX_TTS_CHARS, cleanForSpeech } from "@/lib/lumi/voice";
 import { appleWebKit, setAudioSession } from "./micDiagnostics";
 import { debugError, debugEvent, debugSet } from "./voiceLog";
+import { micHeld } from "../toy/mic";
 
 const LANG = "fi-FI";
 const AUTO_KEY = "lumi.autoSpeak";
@@ -68,6 +69,8 @@ export function useSpeech() {
   const [autoSpeak, setAutoSpeakState] = useState(false);
   /** The browser refused to play Lumi's voice without a tap (iOS autoplay rule). */
   const [blocked, setBlocked] = useState(false);
+  /** The server has told whether the natural voice (ElevenLabs) is available. */
+  const [ready, setReady] = useState(false);
   const runRef = useRef(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const unlockedRef = useRef(false);
@@ -90,7 +93,8 @@ export function useSpeech() {
         debugSet({ ttsConfigured: Boolean(d.configured) });
         if (d.configured) setEngine("elevenlabs");
       })
-      .catch(() => debugSet({ ttsConfigured: false, ttsLast: "tilan tarkistus epäonnistui" }));
+      .catch(() => debugSet({ ttsConfigured: false, ttsLast: "tilan tarkistus epäonnistui" }))
+      .finally(() => setReady(true));
 
     // Unlock audio playback inside a tap (iOS/Safari). Re-armed whenever playback gets blocked.
     let synthUnlocked = false;
@@ -205,6 +209,7 @@ export function useSpeech() {
           u.pitch = 1.1;
           u.onerror = (e) => {
             if (e.error !== "interrupted" && e.error !== "canceled") debugError("Selaimen ääni", e.error);
+            if (e.error === "not-allowed") setBlocked(true);
             if (i === parts.length - 1) finish();
           };
           if (i === parts.length - 1) u.onend = finish;
@@ -339,7 +344,8 @@ export function useSpeech() {
         if (!started) {
           started = true;
           // iOS: make sure the reply plays from the loudspeaker even right after the mic was in use.
-          setAudioSession("playback");
+          // Not while Lumi holds the microphone open (toy mode): "playback" would stop the capture.
+          if (!micHeld()) setAudioSession("playback");
           setSpeakingId(id);
           console.info(`[Lumi viive] puhe alkaa ${Math.round(performance.now() - t0)} ms vastauksen alusta`);
         }
@@ -453,6 +459,7 @@ export function useSpeech() {
   return {
     supported: engine !== "none",
     engine,
+    ready,
     browserVoiceName: browserVoice?.name ?? null,
     speakingId,
     /** True when iOS blocked Lumi's voice; any tap unlocks it again. */

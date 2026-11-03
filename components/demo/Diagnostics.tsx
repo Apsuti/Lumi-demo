@@ -91,6 +91,7 @@ export function DiagnosticsPanel({
         { label: "Puhekeskustelu", value: SESSION[sessionState], ok: sessionState === "error" ? false : null },
         { label: "Kuuntelutapa", value: debug.recognitionMode },
         { label: "Tunnistimen viimeisin tila", value: debug.recognitionLast },
+        { label: "Herätys taputtamalla (liikeanturi)", value: debug.motion },
       ],
     },
     {
@@ -158,7 +159,7 @@ export function DiagnosticsPanel({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/30 sm:items-center" onClick={onClose}>
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-ink/30 sm:items-center" onClick={onClose}>
       <div
         className="flex max-h-[92svh] w-full max-w-lg flex-col rounded-t-3xl bg-white shadow-lift sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}

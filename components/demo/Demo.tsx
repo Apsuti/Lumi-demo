@@ -7,12 +7,17 @@ import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import type { LumiMeta } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
-import { vlog } from "./voiceLog";
+import { debugError, debugEvent, vlog } from "./voiceLog";
 import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
 import { DiagnosticsPanel } from "./Diagnostics";
 import { prepareImage, type PreparedImage } from "./image";
 import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
+import { detectCommand, withoutCommand } from "../toy/commands";
+import { openMic, releaseMic } from "../toy/mic";
+import { requestMotionPermission, useTapWake } from "../toy/tapWake";
+import { takePhoto } from "../toy/camera";
+import { SleepView, TapOverlay, ToyView } from "../toy/Toy";
 
 type ChatMsg = {
   id: number;
@@ -21,6 +26,10 @@ type ChatMsg = {
   meta?: LumiMeta;
   status?: "streaming" | "done" | "error";
   image?: PreparedImage;
+  /** Handled on the device (greeting, "heippa", goodbye…) – never sent to Claude. */
+  local?: boolean;
+  /** Taken with "räps": the picture itself is dropped as soon as it has been sent. */
+  photo?: boolean;
 };
 
 /** Older pictures are dropped from the request to keep it small; the model remembers them from its own replies. */
@@ -44,6 +53,14 @@ const HELPERS = ["Anna pieni vihje 💡", "En tiedä vielä", "Selitä toisella 
 /** Shown when Lumi has stepped back and ended the spoken conversation. */
 const HANDOFF_NOTICE = "Lumi jäi odottamaan. Paina mikkiä, jos tarvitset vielä apua.";
 
+/* Lines Lumi says on the device, without asking Claude. */
+const GREETING = "Hei! Nukahdan, kun sanot heippa. Kun haluat jutella taas, taputa minua kevyesti.";
+const GOODBYE = "Heippa! Nyt nukahdan. Kun haluat jutella taas, taputa minua kevyesti.";
+const WAKE_UP = "Olen taas hereillä!";
+const PHOTO_TAKEN = "Räps! Otin kuvan. Katsotaan sitä.";
+const PHOTO_FAILED = "Kuvan ottaminen ei onnistunut. Voit kokeilla uudelleen sanomalla räps.";
+const PHOTO_DEFAULT_TEXT = "Otin kuvan. Katso tätä.";
+
 const EMPTY_TEXT = "Hmm, ajatus karkasi. Voisitko kertoa sen vielä uudestaan? 🙂";
 
 const REFUSED_TEXT =
@@ -56,12 +73,12 @@ const nextId = () => ++seq;
 function toApiHistory(msgs: ChatMsg[]): ApiTurn[] {
   const withImages = msgs.filter((m) => m.image).slice(-IMAGES_IN_HISTORY);
   return msgs
-    .filter((m) => m.role === "user" || (m.status === "done" && m.text))
+    .filter((m) => !m.local && (m.role === "user" || (m.status === "done" && m.text)))
     .map((m): ApiTurn => {
       if (m.role === "lumi") {
         return { role: "assistant", content: m.meta ? `${m.text}\n<lumi>${JSON.stringify(m.meta)}</lumi>` : m.text };
       }
-      if (!m.image) return { role: "user", content: m.text };
+      if (!m.image) return { role: "user", content: m.photo ? `(Aiemmin lähettämäni kuva.) ${m.text}`.trim() : m.text };
       if (withImages.includes(m)) return { role: "user", content: m.text, images: [{ mediaType: m.image.mediaType, data: m.image.data }] };
       return { role: "user", content: `(Aiemmin lähettämäni kuva.) ${m.text}`.trim() };
     });
@@ -82,6 +99,18 @@ export default function Demo() {
   const [imageError, setImageError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [diagnostics, setDiagnostics] = useState(false);
+  /** Toy mode: opened from the NFC tag (?nfc=1) – starts by itself, no screen needed. */
+  const [toy, setToy] = useState(false);
+  /** Said "heippa": no listening, microphone off; a tap on the toy wakes Lumi. */
+  const [sleeping, setSleeping] = useState(false);
+  /** Lumi's own microphone could not be opened (toy mode): a tap is needed. */
+  const [micError, setMicError] = useState<string | null>(null);
+  const toyRef = useRef(toy);
+  toyRef.current = toy;
+  const sleepingRef = useRef(sleeping);
+  sleepingRef.current = sleeping;
+  /** The spoken conversation was started in this toy session (so "off" afterwards means rest). */
+  const bootedRef = useRef(false);
   const dragDepth = useRef(0);
 
   const speech = useSpeech();
@@ -94,7 +123,8 @@ export default function Demo() {
    * listening resumes by itself afterwards.
    */
   const sendRef = useRef<(text: string) => void>(() => {});
-  const voice = useVoiceSession((text) => sendRef.current(text));
+  const utteranceRef = useRef<(text: string) => void>(() => {});
+  const voice = useVoiceSession((text) => utteranceRef.current(text));
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
 
@@ -135,7 +165,10 @@ export default function Demo() {
 
   const ask = useCallback(async (history: ChatMsg[]) => {
     const lumiId = nextId();
-    setMsgs([...history, { id: lumiId, role: "lumi", text: "", status: "streaming" }]);
+    const apiHistory = toApiHistory(history);
+    // A "räps" photo lives only in this request: the chat keeps no copy of it.
+    const kept = history.map((m) => (m.photo && m.image ? { ...m, image: undefined } : m));
+    setMsgs([...kept, { id: lumiId, role: "lumi", text: "", status: "streaming" }]);
     setBusy(true);
     setWaiting(true);
     setMood("think");
@@ -157,7 +190,7 @@ export default function Demo() {
           )
         : null;
 
-    await streamLumi(toApiHistory(history), ctrl.signal, {
+    await streamLumi(apiHistory, ctrl.signal, {
       onMeta: (m) => {
         gotMeta = m;
         setMeta(m);
@@ -282,6 +315,159 @@ export default function Demo() {
   };
 
   sendRef.current = send;
+
+  /* ───────── Toy mode, sleep and voice commands ───────── */
+
+  /** Lumi says something on the device (greeting, goodbye, photo) – never sent to Claude. */
+  const sayLocal = (text: string, then?: () => void) => {
+    const id = nextId();
+    setMsgs((prev) => [...prev, { id, role: "lumi", text, status: "done", local: true }]);
+    speechRef.current.speak(id, text, then);
+  };
+
+  /**
+   * Starts a spoken conversation without a button: 1. microphone (getUserMedia), 2. the
+   * conversation (the recogniser waits while Lumi talks, so she never hears herself),
+   * 3. Lumi's line – then listening begins. Used by the NFC start and by waking up.
+   */
+  const boot = async (line: string) => {
+    setPhase("chat");
+    setMicError(null);
+    speechRef.current.stop();
+    const mic = await openMic();
+    if (!mic.ok) {
+      setMicError(mic.error);
+      return;
+    }
+    // Lumi's voice choice (ElevenLabs or not) must be known before she speaks.
+    for (let i = 0; i < 60 && !speechRef.current.ready; i++) await new Promise((r) => setTimeout(r, 50));
+    bootedRef.current = true;
+    voiceRef.current.start({ gesture: false, paused: true });
+    sayLocal(line, () => voiceRef.current.resume());
+  };
+
+  /** Lumi stops listening and closes the microphone completely. */
+  const fallAsleep = () => {
+    voiceRef.current.end();
+    releaseMic();
+    setSleeping(true);
+    setMood("idle");
+    debugEvent("Lumi nukahti (mikki pois)");
+  };
+
+  /** "heippa": handled here, never sent to Claude. */
+  const goToSleep = (said: string) => {
+    setMsgs((prev) => [...prev, { id: nextId(), role: "user", text: said, local: true }]);
+    voiceRef.current.pause();
+    sayLocal(GOODBYE, fallAsleep);
+  };
+
+  const wake = () => {
+    if (!sleepingRef.current) return;
+    setSleeping(false);
+    debugEvent("Lumi heräsi");
+    void boot(WAKE_UP);
+  };
+
+  /** "räps": one photo with the back camera, sent to Claude with what was said around it. */
+  const snap = async (said: string) => {
+    voiceRef.current.pause();
+    speechRef.current.stop();
+    if (busy || preparing) return voiceRef.current.resume();
+    setPreparing(true);
+    let image: PreparedImage;
+    try {
+      image = await takePhoto();
+    } catch (e) {
+      setPreparing(false);
+      debugError("Kamera", (e as DOMException)?.name ?? String(e));
+      return sayLocal(PHOTO_FAILED, () => voiceRef.current.resume());
+    }
+    setPreparing(false);
+    const text = withoutCommand(said) || PHOTO_DEFAULT_TEXT;
+    sayLocal(PHOTO_TAKEN, () => {
+      const base = msgsRef.current.filter((m) => m.status !== "error");
+      vlog("4. Message send started", { text, image: true, photo: true });
+      ask([...base, { id: nextId(), role: "user", text, image, photo: true }]);
+    });
+  };
+
+  utteranceRef.current = (text: string) => {
+    const command = detectCommand(text);
+    if (command) vlog("4. Voice command", { command, text });
+    if (command === "sleep") return goToSleep(text);
+    if (command === "photo") return void snap(text);
+    send(text);
+  };
+
+  // Opened from the NFC tag: start talking straight away.
+  useEffect(() => {
+    if (!new URLSearchParams(window.location.search).has("nfc")) return;
+    setToy(true);
+    void boot(GREETING);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The microphone is never left open when the conversation is off. In toy mode the
+  // conversation ending by itself (Lumi stepped back, or a long silence) means rest.
+  useEffect(() => {
+    if (voice.state !== "off" && voice.state !== "error") return;
+    releaseMic();
+    if (voice.state === "off" && toyRef.current && bootedRef.current && !sleepingRef.current) {
+      setSleeping(true);
+      debugEvent("Keskustelu päättyi → Lumi lepää");
+    }
+  }, [voice.state]);
+
+  // A tap on the toy wakes Lumi; only the motion sensor listens while she sleeps.
+  useTapWake(sleeping, wake);
+
+  /** Why toy mode needs a touch right now (null: it doesn't). */
+  const tapReason =
+    !toy || sleeping
+      ? null
+      : micError
+        ? `Mikki ei auennut (${micError}).`
+        : voice.state === "error"
+          ? voice.issue?.title ?? "Mikki ei toimi."
+          : voice.state === "tap"
+            ? "Puhelin haluaa kosketuksen ennen kuuntelua."
+            : speech.blocked
+              ? "Puhelin esti Lumin äänen."
+              : null;
+
+  // Ask for attention: vibrate (where the browser allows it) when a touch is needed.
+  useEffect(() => {
+    if (tapReason === null) return;
+    let ok = false;
+    try {
+      ok = navigator.vibrate?.([200, 100, 200]) ?? false;
+    } catch {
+      /* not supported */
+    }
+    debugEvent(`Taputa minua -näkymä (${tapReason}) – värinä ${ok ? "ok" : "ei käytettävissä"}`);
+  }, [tapReason]);
+
+  /** The touch on "Taputa minua": now everything is allowed, so start whatever was blocked. */
+  const onTapOverlay = () => {
+    void requestMotionPermission();
+    if (micError || voice.state === "error") {
+      voice.dismiss();
+      void boot(GREETING);
+    } else if (voice.state === "tap") {
+      voice.tapToTalk();
+    } else if (speech.blocked) {
+      // This touch unlocked audio: say the last line again, then listen.
+      const last = [...msgsRef.current].reverse().find((m) => m.role === "lumi" && m.status === "done");
+      voice.pause();
+      speech.speak(last?.id ?? nextId(), last?.text ?? GREETING, () => voiceRef.current.resume());
+    }
+  };
+
+  const onSleepTouch = () => {
+    void requestMotionPermission(); // iOS: allows waking by a tap on the toy next time
+    wake();
+  };
 
   const startVoice = () => {
     speech.stop(); // never let the mic hear Lumi's own voice
@@ -438,6 +624,51 @@ export default function Demo() {
     </div>
   );
 
+
+  const diagnosticsPanel = (
+    <DiagnosticsPanel
+      open={diagnostics}
+      onClose={() => setDiagnostics(false)}
+      sessionState={voice.state}
+      engine={speech.engine}
+      browserVoiceName={speech.browserVoiceName}
+      onTestVoice={testVoice}
+    />
+  );
+
+  if (toy) {
+    const lastLine = [...msgs].reverse().find((m) => m.role === "lumi" && m.status === "done")?.text ?? null;
+    const status = lumiSpeaking
+      ? "Puhun"
+      : preparing
+        ? "Otan kuvaa…"
+        : busy
+          ? "Mietin…"
+          : voice.state === "hearing"
+            ? "Kuulen sinut"
+            : voice.state === "listening"
+              ? "Kuuntelen"
+              : "Herään…";
+    return (
+      <>
+        {sleeping ? (
+          <SleepView onWake={onSleepTouch} />
+        ) : (
+          <ToyView
+            mood={voice.state === "hearing" ? "curious" : mood}
+            speaking={lumiSpeaking}
+            status={status}
+            transcript={voice.transcript}
+            lastLine={lastLine}
+            onDiagnostics={() => setDiagnostics(true)}
+          />
+        )}
+        <TapOverlay reason={tapReason} onTap={onTapOverlay} />
+        {diagnosticsPanel}
+      </>
+    );
+  }
+
   return (
     <div className="relative overflow-hidden rounded-[2rem] border border-white/70 bg-white/80 shadow-[0_40px_120px_-40px_rgba(91,135,245,0.45)] ring-1 ring-ink/[0.05] backdrop-blur-xl sm:rounded-[2.5rem]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_10%_0%,rgba(204,221,255,0.55),transparent),radial-gradient(50%_50%_at_100%_100%,rgba(221,210,255,0.55),transparent)]" />
@@ -519,14 +750,8 @@ export default function Demo() {
           )}
         </AnimatePresence>
       </div>
-      <DiagnosticsPanel
-        open={diagnostics}
-        onClose={() => setDiagnostics(false)}
-        sessionState={voice.state}
-        engine={speech.engine}
-        browserVoiceName={speech.browserVoiceName}
-        onTestVoice={testVoice}
-      />
+      {sleeping && <SleepView onWake={onSleepTouch} />}
+      {diagnosticsPanel}
     </div>
   );
 }

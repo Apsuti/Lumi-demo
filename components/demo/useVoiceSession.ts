@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { debugError, debugSet, newTurn, vlog } from "./voiceLog";
 import { diagnoseRecognitionError, detectPlatform, makeIssue, preflight, setAudioSession, type MicIssue } from "./micDiagnostics";
+import { releaseMic } from "../toy/mic";
 
 /**
  * Continuous, patient voice conversation on top of the Web Speech API.
@@ -115,6 +116,8 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   const firstStartRef = useRef(false);
   /** The browser only starts listening from a tap (iPhone): resume by asking for a press. */
   const needsTapRef = useRef(false);
+  /** Started without a tap (NFC tag, waking by a tap on the toy): a refused start means "tap needed". */
+  const autoStartRef = useRef(false);
   const captureRetries = useRef(0);
   const meterRef = useRef<{ stream: MediaStream; ctx: AudioContext; raf: number } | null>(null);
   const onUtteranceRef = useRef(onUtterance);
@@ -284,7 +287,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     clear(startTimer);
     startTimer.current = setTimeout(() => {
       if (recRef.current !== rec || !activeRef.current) return;
-      if (!first && !fromTap) return needTap(`onstart puuttui ${limit / 1000} s`);
+      if (!fromTap && (!first || autoStartRef.current)) return needTap(`onstart puuttui ${limit / 1000} s`);
       fail(makeIssue("start_timeout", detectPlatform(), `onstart puuttui ${limit / 1000} s`));
     }, limit);
     debugSet({ recognitionLast: `start() ${fromTap ? "napautuksesta" : "automaattisesti"}` });
@@ -335,11 +338,13 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       if (recRef.current !== rec) return;
       debugSet({ recognitionLast: `virhe: ${e.error}` });
       if (e.error !== "no-speech" && e.error !== "aborted") debugError("Puheentunnistus", e.error);
-      // Listening already worked in this session: a refused restart without a tap is not a
-      // permission problem – iPhone simply wants a press of the mic.
-      if (!first && !fromTap && (e.error === "not-allowed" || e.error === "service-not-allowed")) return needTap(e.error);
-      // The mic may still be held for a moment by the previous recogniser or Lumi's voice.
-      if (!first && e.error === "audio-capture" && captureRetries.current++ < 2) {
+      // Listening already worked in this session (or the microphone was just opened without a
+      // tap): a refused start is not a permission problem – iPhone simply wants a tap.
+      if (!fromTap && (!first || autoStartRef.current) && (e.error === "not-allowed" || e.error === "service-not-allowed")) return needTap(e.error);
+      // The mic may still be held for a moment by the previous recogniser, Lumi's voice or
+      // Lumi's own microphone stream – release that and try again.
+      if ((!first || autoStartRef.current) && e.error === "audio-capture" && captureRetries.current++ < 2) {
+        releaseMic();
         killRec();
         resumeTimer.current = setTimeout(() => listen(fromTap), 800);
         return;
@@ -375,14 +380,18 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       const name = (err as Error)?.name ?? String(err);
       debugError("Puheentunnistus", `start() heitti ${name}`);
       // Failing on the very first start means recognition cannot run here at all.
+      if (!fromTap && name === "NotAllowedError" && (!first || autoStartRef.current)) return needTap(`start(): ${name}`);
       if (first) return fail(makeIssue("start_timeout", detectPlatform(), `start(): ${name}`));
-      if (!fromTap && name === "NotAllowedError") return needTap(`start(): ${name}`);
       resumeTimer.current = setTimeout(() => listen(fromTap), 800);
     }
   }, [armIdle, fail, needTap]);
 
-  /** The child presses the mic once to start talking with Lumi. */
-  const start = useCallback(() => {
+  /**
+   * The child presses the mic once to start talking with Lumi.
+   * `gesture: false` – started without a tap (NFC tag, waking by a tap on the toy).
+   * `paused: true` – the session is on but listening waits for `resume()` (Lumi greets first).
+   */
+  const start = useCallback((opts?: { gesture?: boolean; paused?: boolean }) => {
     if (activeRef.current) return;
     // HTTPS, Web Speech API, in-app browsers: known before any permission prompt.
     const blocker = preflight();
@@ -393,6 +402,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     networkErrors.current = 0;
     firstStartRef.current = true;
     needsTapRef.current = false;
+    autoStartRef.current = opts?.gesture === false;
     captureRetries.current = 0;
     debugSet({ recognitionMode: "jatkuva – kuuntelu jatkuu itsestään Lumin jälkeen" });
     setIssue(null);
@@ -400,7 +410,12 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     setState("starting");
     armIdle();
     startMeter();
-    listen(true);
+    if (opts?.paused) {
+      pausedRef.current = true;
+      setState("paused");
+      return;
+    }
+    listen(opts?.gesture !== false);
   }, [armIdle, fail, listen, startMeter]);
 
   /** In "tap" mode: the child pressed the mic to answer. Runs inside the tap, as iPhone requires. */

@@ -40,6 +40,8 @@ export type DebugState = {
   /** Speech recognition: how listening resumes (automatically or by a tap). */
   recognitionMode: string;
   recognitionLast: string;
+  /** Waking by a tap on the toy: motion sensor permission and threshold. */
+  motion: string;
   lastError: string;
   events: string[];
 };
@@ -53,6 +55,7 @@ let state: DebugState = {
   voiceUsed: "–",
   recognitionMode: "–",
   recognitionLast: "–",
+  motion: "ei vielä käytetty",
   lastError: "ei virheitä",
   events: [],
 };
