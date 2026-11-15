@@ -52,12 +52,3 @@ export async function prepareImage(file: Blob): Promise<PreparedImage> {
     close();
   }
 }
-
-/** Grabs a still frame from a live <video> (desktop webcam). */
-export function captureFrame(video: HTMLVideoElement): Promise<Blob> {
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext("2d")!.drawImage(video, 0, 0);
-  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("capture"))), "image/jpeg", 0.92));
-}

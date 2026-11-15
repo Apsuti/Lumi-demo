@@ -1,20 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Camera, ImagePlus, Loader2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { captureFrame } from "./image";
+import { ImagePlus, Loader2, X } from "lucide-react";
+import { useRef } from "react";
 
-/** Phones open the real camera app through the file input; laptops get an in-page webcam view. */
-function prefersNativeCamera() {
-  return window.matchMedia("(pointer: coarse)").matches;
-}
-
+/** Picture as a file (developer testing in the normal view). There is no camera: the child cannot show anything. */
 export function AttachButtons({ disabled, onFile }: { disabled: boolean; onFile: (f: Blob) => void }) {
-  const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [webcam, setWebcam] = useState(false);
 
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -22,123 +14,20 @@ export function AttachButtons({ disabled, onFile }: { disabled: boolean; onFile:
     if (f) onFile(f);
   };
 
-  const btn =
-    "grid h-11 w-11 shrink-0 place-items-center rounded-full bg-sky-50 text-sky-600 transition hover:bg-sky-100 disabled:opacity-30";
-
   return (
     <>
       <button
         type="button"
-        className={btn}
+        className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-sky-50 text-sky-600 transition hover:bg-sky-100 disabled:opacity-30"
         disabled={disabled}
-        onClick={() => (prefersNativeCamera() || !navigator.mediaDevices?.getUserMedia ? cameraRef.current?.click() : setWebcam(true))}
-        aria-label="Ota kuva kameralla"
-        title="Ota kuva kameralla"
+        onClick={() => fileRef.current?.click()}
+        aria-label="Lisää kuva"
+        title="Lisää kuva"
       >
-        <Camera className="h-5 w-5" />
-      </button>
-      <button type="button" className={btn} disabled={disabled} onClick={() => fileRef.current?.click()} aria-label="Lisää kuva" title="Lisää kuva">
         <ImagePlus className="h-5 w-5" />
       </button>
-      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={pick} />
       <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pick} />
-      {/* Portal: the chat card's backdrop blur would otherwise trap a fixed overlay inside it. */}
-      {typeof document !== "undefined" &&
-        createPortal(
-          <AnimatePresence>
-            {webcam && (
-              <WebcamDialog
-                onClose={() => setWebcam(false)}
-                onCapture={(b) => {
-                  setWebcam(false);
-                  onFile(b);
-                }}
-                onFallback={() => {
-                  setWebcam(false);
-                  cameraRef.current?.click();
-                }}
-              />
-            )}
-          </AnimatePresence>,
-          document.body,
-        )}
     </>
-  );
-}
-
-function WebcamDialog({ onClose, onCapture, onFallback }: { onClose: () => void; onCapture: (b: Blob) => void; onFallback: () => void }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    let cancelled = false;
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
-      .then((s) => {
-        if (cancelled) return s.getTracks().forEach((t) => t.stop());
-        stream = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-      })
-      .catch(() => setError(true));
-    return () => {
-      cancelled = true;
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  return (
-    <motion.div
-      className="fixed inset-0 z-50 grid place-items-center bg-ink/60 p-4 backdrop-blur-sm"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-    >
-      <motion.div
-        className="w-full max-w-xl overflow-hidden rounded-3xl bg-white shadow-lift"
-        initial={{ scale: 0.95, y: 10 }}
-        animate={{ scale: 1, y: 0 }}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Ota kuva"
-      >
-        <div className="flex items-center justify-between px-5 py-3">
-          <span className="font-display text-base font-extrabold">Ota kuva tehtävästä</span>
-          <button onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full bg-ink/5" aria-label="Sulje">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="relative aspect-video bg-ink">
-          {error ? (
-            <div className="grid h-full place-items-center p-6 text-center text-sm text-white/80">
-              <div>
-                Kameraa ei saatu auki. Salli kameran käyttö selaimen osoiterivin lukkokuvakkeesta, tai valitse kuva tiedostona.
-                <button onClick={onFallback} className="mx-auto mt-4 block rounded-full bg-white px-4 py-2 text-sm font-bold text-ink">
-                  Valitse kuva
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <video ref={videoRef} autoPlay playsInline muted onLoadedData={() => setReady(true)} className="h-full w-full object-contain" />
-              {!ready && <Loader2 className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 animate-spin text-white/70" />}
-            </>
-          )}
-        </div>
-        <div className="flex items-center justify-between gap-3 px-5 py-4">
-          <p className="text-sm text-ink-soft">Pidä tehtävä kuvassa suorassa ja hyvässä valossa.</p>
-          <button
-            disabled={!ready}
-            onClick={async () => videoRef.current && onCapture(await captureFrame(videoRef.current))}
-            className="btn-primary shrink-0 !px-5 !py-3 disabled:opacity-40"
-          >
-            <Camera className="h-4 w-4" /> Ota kuva
-          </button>
-        </div>
-      </motion.div>
-    </motion.div>
   );
 }
 

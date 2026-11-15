@@ -5,6 +5,7 @@ import { MAX_TTS_CHARS, cleanForSpeech } from "@/lib/lumi/voice";
 import { appleWebKit, setAudioSession } from "./micDiagnostics";
 import { debugError, debugEvent, debugSet } from "./voiceLog";
 import { micHeld } from "../toy/mic";
+import { analyseBlob, audioSource, forgetEnvelope, primeAudioGraph, speechLevel } from "../toy/speechLevel";
 
 const LANG = "fi-FI";
 const AUTO_KEY = "lumi.autoSpeak";
@@ -85,6 +86,13 @@ export function useSpeech() {
     }
     // Created at once so that the very first tap can unlock it (before the status check returns).
     audioRef.current ??= new Audio();
+    // The glow follows the real sound: on when audio plays, off in the gaps (not the silent unlock clip).
+    const el = audioRef.current;
+    const onPlaying = () => !el.src.startsWith("data:") && speechLevel.begin(audioSource(el));
+    const onQuiet = () => speechLevel.pause();
+    el.addEventListener("playing", onPlaying);
+    el.addEventListener("pause", onQuiet);
+    el.addEventListener("ended", onQuiet);
 
     // Natural voice (ElevenLabs, always the same voice) when the server has a key.
     fetch("/api/tts?status=1")
@@ -103,6 +111,7 @@ export function useSpeech() {
       const a = audioRef.current;
       if (!a || unlockedRef.current) return;
       unlockedRef.current = true;
+      primeAudioGraph();
       if (a.paused) {
         a.src = silentWav();
         a.play()
@@ -139,7 +148,12 @@ export function useSpeech() {
       }
     };
     GESTURES.forEach((g) => window.addEventListener(g, unlock, true));
-    const removeUnlock = () => GESTURES.forEach((g) => window.removeEventListener(g, unlock, true));
+    const removeUnlock = () => {
+      GESTURES.forEach((g) => window.removeEventListener(g, unlock, true));
+      el.removeEventListener("playing", onPlaying);
+      el.removeEventListener("pause", onQuiet);
+      el.removeEventListener("ended", onQuiet);
+    };
 
     if (!hasBrowser) return removeUnlock;
     const load = () => {
@@ -165,7 +179,10 @@ export function useSpeech() {
     runRef.current++;
     abortRef.current?.abort();
     abortRef.current = null;
-    urlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+    urlsRef.current.forEach((u) => {
+      URL.revokeObjectURL(u);
+      forgetEnvelope(u);
+    });
     urlsRef.current = [];
     const a = audioRef.current;
     if (a) {
@@ -173,6 +190,7 @@ export function useSpeech() {
       a.pause();
     }
     if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    speechLevel.end();
     setSpeakingId(null);
   }, []);
 
@@ -204,6 +222,9 @@ export function useSpeech() {
         parts.forEach((part, i) => {
           const u = new SpeechSynthesisUtterance(part);
           u.lang = LANG;
+          // No loudness from speechSynthesis: the glow beats on each spoken word instead.
+          u.onstart = () => speechLevel.begin(null);
+          u.onboundary = () => speechLevel.beat();
           if (browserVoice) u.voice = browserVoice;
           u.rate = 1.12; // natural conversational pace, matching the ElevenLabs voice
           u.pitch = 1.1;
@@ -315,6 +336,7 @@ export function useSpeech() {
             if (!b || !live()) return null;
             debugSet({ ttsLast: `OK – ${Math.round(performance.now() - started)} ms, ${Math.round(b.size / 1024)} kt` });
             const u = URL.createObjectURL(b);
+            void analyseBlob(u, b);
             urlsRef.current.push(u);
             return u;
           })
@@ -327,6 +349,7 @@ export function useSpeech() {
       const finish = () => {
         if (finished || !live()) return;
         finished = true;
+        speechLevel.end();
         setSpeakingId(null);
         onDone?.();
       };

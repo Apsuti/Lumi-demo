@@ -1,0 +1,142 @@
+/*
+ * Lumin valot lelutilassa (?nfc=1). Näyttöä katsotaan kuoren läpi, joten kaikki on
+ * koko näytön kokoista, pehmeää ja kirkasta valoa. Säädä värejä ja nopeuksia tästä.
+ */
+:root {
+  --glow-fade: 0.6s; /* siirtymä tilasta toiseen */
+
+  /* Odottaa: himmeä, hitaasti hengittävä sininen */
+  --glow-idle-bg: #060a22;
+  --glow-idle-color: #3d6bff;
+  --glow-idle-breath: 6s; /* yhden hengityksen kesto */
+  --glow-idle-min: 0.25; /* hengityksen himmein kohta (0–1) */
+  --glow-idle-max: 0.65; /* hengityksen kirkkain kohta (0–1) */
+  --glow-sleep-dim: 0.5; /* unitilassa (heipan jälkeen) valo on tämän verran himmeämpi */
+
+  /* Kuuntelee: lämmin, tasainen hehku */
+  --glow-listen-bg: #2a1305;
+  --glow-listen-color: #ffae5c;
+  --glow-listen-strength: 0.7; /* hehku, kun Lumi odottaa puhetta */
+  --glow-hearing-strength: 1; /* hehku, kun lapsi puhuu */
+
+  /* Miettii: pehmeät värilaikut kiertävät hitaasti */
+  --glow-think-bg: #100a2c;
+  --glow-think-color-1: #8b5cff;
+  --glow-think-color-2: #39c6ff;
+  --glow-think-color-3: #ff7ad9;
+  --glow-think-spin: 7s; /* yksi kierros */
+
+  /* Puhuu: kirkas syke, joka seuraa äänen voimakkuutta */
+  --glow-speak-bg: #031c26;
+  --glow-speak-color: #6ff3ff;
+  --glow-speak-min: 0.3; /* kirkkaus hiljaisimmillaan */
+  --glow-speak-gain: 0.7; /* lisäkirkkaus täydellä äänellä */
+  --glow-speak-grow: 0.3; /* kuinka paljon valo laajenee täydellä äänellä */
+  --glow-speak-follow: 70ms; /* kuinka nopeasti valo seuraa ääntä */
+}
+
+/* ── toteutus (ei tarvitse muuttaa) ── */
+
+.lumi-glow {
+  --lumi-level: 0;
+  --lumi-dim: 1;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lumi-glow__layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--glow-fade) ease;
+}
+.lumi-glow__layer::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  border-radius: 50%;
+  will-change: transform, opacity;
+}
+
+.lumi-glow[data-state="idle"] .lumi-glow__idle,
+.lumi-glow[data-state="listening"] .lumi-glow__listen,
+.lumi-glow[data-state="thinking"] .lumi-glow__think,
+.lumi-glow[data-state="speaking"] .lumi-glow__speak {
+  opacity: 1;
+}
+
+/* Odottaa */
+.lumi-glow__idle {
+  background: var(--glow-idle-bg);
+}
+.lumi-glow__idle::before {
+  background: radial-gradient(circle, var(--glow-idle-color) 0%, transparent 62%);
+  opacity: calc(var(--glow-idle-min) * var(--lumi-dim));
+}
+.lumi-glow[data-state="idle"] .lumi-glow__idle::before {
+  animation: lumi-breathe var(--glow-idle-breath) ease-in-out infinite;
+}
+.lumi-glow[data-sleep="true"] {
+  --lumi-dim: var(--glow-sleep-dim);
+}
+@keyframes lumi-breathe {
+  0%,
+  100% {
+    opacity: calc(var(--glow-idle-min) * var(--lumi-dim));
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: calc(var(--glow-idle-max) * var(--lumi-dim));
+    transform: scale(1.06);
+  }
+}
+
+/* Kuuntelee */
+.lumi-glow__listen {
+  background: var(--glow-listen-bg);
+}
+.lumi-glow__listen::before {
+  background: radial-gradient(circle, var(--glow-listen-color) 0%, transparent 65%);
+  opacity: var(--glow-listen-strength);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.lumi-glow[data-hearing="true"] .lumi-glow__listen::before {
+  opacity: var(--glow-hearing-strength);
+  transform: scale(1.08);
+}
+
+/* Miettii */
+.lumi-glow__think {
+  background: var(--glow-think-bg);
+}
+.lumi-glow__think::before {
+  inset: 50% auto auto 50%;
+  width: 170vmax;
+  height: 170vmax;
+  margin: -85vmax 0 0 -85vmax;
+  background:
+    radial-gradient(circle at 38% 40%, var(--glow-think-color-1) 0%, transparent 22%),
+    radial-gradient(circle at 62% 58%, var(--glow-think-color-2) 0%, transparent 22%),
+    radial-gradient(circle at 58% 36%, var(--glow-think-color-3) 0%, transparent 18%);
+  opacity: 0.85;
+}
+.lumi-glow[data-state="thinking"] .lumi-glow__think::before {
+  animation: lumi-spin var(--glow-think-spin) linear infinite;
+}
+@keyframes lumi-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/* Puhuu */
+.lumi-glow__speak {
+  background: var(--glow-speak-bg);
+}
+.lumi-glow__speak::before {
+  background: radial-gradient(circle, var(--glow-speak-color) 0%, transparent 62%);
+  opacity: calc(var(--glow-speak-min) + var(--lumi-level) * var(--glow-speak-gain));
+  transform: scale(calc(0.9 + var(--lumi-level) * var(--glow-speak-grow)));
+  transition: opacity var(--glow-speak-follow) linear, transform var(--glow-speak-follow) linear;
+}
