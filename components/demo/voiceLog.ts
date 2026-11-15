@@ -44,6 +44,8 @@ export type DebugState = {
   motion: string;
   /** Screen Wake Lock: keeps the screen on in toy mode so a tap can wake Lumi. */
   wakeLock: string;
+  /** Toy mode: why Lumi last fell asleep by herself (something kept her from listening or talking). */
+  autoSleep: string;
   lastError: string;
   events: string[];
 };
@@ -59,6 +61,7 @@ let state: DebugState = {
   recognitionLast: "–",
   motion: "ei vielä käytetty",
   wakeLock: "ei käytössä",
+  autoSleep: "ei kertaakaan",
   lastError: "ei virheitä",
   events: [],
 };

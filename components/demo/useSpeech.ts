@@ -487,6 +487,8 @@ export function useSpeech() {
     speakingId,
     /** True when iOS blocked Lumi's voice; any tap unlocks it again. */
     blocked,
+    /** Forget an earlier block (Lumi woke up): the next sound shows whether it still holds. */
+    clearBlocked: useCallback(() => setBlocked(false), []),
     speak,
     beginStream,
     stop,

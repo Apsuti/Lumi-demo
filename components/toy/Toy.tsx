@@ -1,19 +1,20 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import { speechLevel } from "./speechLevel";
+import { requestMotionPermission } from "./tapWake";
 import "./glow.css";
 
 /**
  * Toy mode (?nfc=1): the phone sits inside a lunch-box shell and the child never looks at
  * the screen. Through the shell only light shows, so the whole screen glows in a colour and
  * rhythm that tells what Lumi is doing (colours and speeds: glow.css). Lumi and a short
- * status are on top for whoever holds the phone, and – only when the browser insists on a
- * touch – one big "Taputa minua" area.
+ * status are on top for whoever holds the phone. Lumi is either awake or asleep: anything
+ * that keeps her from listening or talking puts her to sleep, and a tap wakes her.
  */
 export type GlowState = "idle" | "listening" | "thinking" | "speaking";
 
@@ -70,10 +71,14 @@ export function ToyView({
   onDiagnostics: () => void;
 }) {
   return (
-    <FullScreen>
+    // iPhone: a touch while Lumi is awake also allows waking her later by tapping the toy.
+    <FullScreen onClick={() => void requestMotionPermission()} label="Lumi">
       <Glow state={glow} hearing={hearing} />
       <button
-        onClick={onDiagnostics}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDiagnostics();
+        }}
         className="absolute right-4 top-4 z-10 grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white/60 ring-1 ring-white/20"
         aria-label="Laitetiedot"
       >
@@ -93,7 +98,7 @@ export function ToyView({
 }
 
 /** Calm sleep view: no listening. A tap on the toy (motion sensor) or the screen wakes Lumi. */
-export function SleepView({ onWake }: { onWake: () => void }) {
+export function SleepView({ onWake, note }: { onWake: () => void; note?: string | null }) {
   return (
     <FullScreen onClick={onWake} label="Herätä Lumi">
       <Glow state="idle" sleep />
@@ -111,37 +116,9 @@ export function SleepView({ onWake }: { onWake: () => void }) {
         <p className="mt-8 font-display text-2xl font-extrabold text-white">Lumi nukkuu</p>
         <p className="mt-2 text-base text-white/70">Taputa minua kevyesti, niin herään.</p>
         <p className="mt-6 text-xs text-white/40">Mikrofoni on pois päältä.</p>
+        {note && <p className="mt-2 max-w-xs text-xs text-white/40">Nukahti itsestään: {note}</p>}
       </div>
     </FullScreen>
-  );
-}
-
-/** Shown when the browser needs a touch before it lets Lumi listen or talk. The whole screen is the button. */
-export function TapOverlay({ reason, onTap }: { reason: string | null; onTap: () => void }) {
-  return (
-    <AnimatePresence>
-      {reason !== null && (
-        <motion.button
-          key="tap"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onTap}
-          className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-gradient-to-br from-sky-500 to-lilac-500 px-6 text-center text-white"
-          aria-label="Taputa minua"
-        >
-          <motion.span
-            className="font-display text-5xl font-black"
-            animate={{ scale: [1, 1.06, 1] }}
-            transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
-          >
-            Taputa minua
-          </motion.span>
-          <span className="mt-4 text-lg font-semibold text-white/85">Kosketa mitä tahansa kohtaa näytöllä.</span>
-          {reason && <span className="mt-8 max-w-sm text-xs text-white/60">{reason}</span>}
-        </motion.button>
-      )}
-    </AnimatePresence>
   );
 }
 

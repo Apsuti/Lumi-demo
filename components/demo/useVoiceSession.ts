@@ -428,6 +428,20 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     listen(true);
   }, [armIdle, listen]);
 
+  /**
+   * Try listening again without a tap (toy mode): forgets an earlier "tap needed",
+   * so one refused start does not decide the rest of the conversation.
+   */
+  const retryListen = useCallback(() => {
+    if (!activeRef.current) return;
+    needsTapRef.current = false;
+    clear(resumeTimer);
+    pausedRef.current = false;
+    setState("starting");
+    armIdle();
+    listen(false);
+  }, [armIdle, listen]);
+
   /** Lumi is thinking or speaking: stop recognising so she never hears herself. */
   const pause = useCallback(() => {
     if (!activeRef.current) return;
@@ -513,6 +527,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     notice,
     start,
     tapToTalk,
+    retryListen,
     pause,
     resume,
     sendNow,

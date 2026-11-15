@@ -7,7 +7,7 @@ import LumiCharacter, { type LumiMood } from "../LumiCharacter";
 import type { LumiMeta } from "@/lib/lumi/meta";
 import { streamLumi, type ApiTurn } from "./client";
 import { useSpeech } from "./useSpeech";
-import { debugError, debugEvent, vlog } from "./voiceLog";
+import { debugError, debugEvent, debugSet, vlog } from "./voiceLog";
 import { useVoiceSession } from "./useVoiceSession";
 import { MicButton, VoicePanel } from "./Voice";
 import { DiagnosticsPanel } from "./Diagnostics";
@@ -15,9 +15,10 @@ import { prepareImage, type PreparedImage } from "./image";
 import { AttachButtons, AttachmentPreview, DropOverlay } from "./ImageAttach";
 import { detectCommand } from "../toy/commands";
 import { openMic, releaseMic } from "../toy/mic";
+import { appleWebKit } from "./micDiagnostics";
 import { requestMotionPermission, useTapWake } from "../toy/tapWake";
 import { useWakeLock } from "../toy/wakeLock";
-import { GlowDemo, SleepView, TapOverlay, ToyView, type GlowState } from "../toy/Toy";
+import { GlowDemo, SleepView, ToyView, type GlowState } from "../toy/Toy";
 import { useSpeaking } from "../toy/speechLevel";
 
 type ChatMsg = {
@@ -56,6 +57,10 @@ const HANDOFF_NOTICE = "Lumi jäi odottamaan. Paina mikkiä, jos tarvitset viel�
 const GREETING = "Hei! Nukahdan, kun sanot heippa. Kun haluat jutella taas, taputa minua kevyesti.";
 const GOODBYE = "Heippa! Nyt nukahdan. Kun haluat jutella taas, taputa minua kevyesti.";
 const WAKE_UP = "Olen taas hereillä!";
+/** Said before Lumi falls asleep by herself (she could not keep listening or talking). */
+const TIRED = "Nyt minua väsyttää. Taputa minua, niin jutellaan taas.";
+/** Toy mode: quiet retries before Lumi falls asleep by herself. */
+const RETRY_DELAYS_MS = [1000, 3000, 6000];
 
 /** Said aloud when the answer could not be fetched – the child cannot see the error on the screen. */
 const SPOKEN_ERROR = "Yhteys katkesi hetkeksi. Kysytkö uudelleen?";
@@ -113,6 +118,12 @@ export default function Demo() {
   sleepingRef.current = sleeping;
   /** The spoken conversation was started in this toy session (so "off" afterwards means rest). */
   const bootedRef = useRef(false);
+  /** Each start (and falling asleep) gets a number, so a start that is still running can be cancelled. */
+  const bootGenRef = useRef(0);
+  /** Quiet retries used for the current problem (toy mode). */
+  const retriesRef = useRef(0);
+  /** Why Lumi fell asleep by herself – shown small on the sleep screen for the adult. */
+  const [sleepNote, setSleepNote] = useState<string | null>(null);
   const dragDepth = useRef(0);
 
   const speech = useSpeech();
@@ -333,24 +344,29 @@ export default function Demo() {
    * conversation (the recogniser waits while Lumi talks, so she never hears herself),
    * 3. Lumi's line – then listening begins. Used by the NFC start and by waking up.
    */
-  const boot = async (line: string) => {
+  const boot = async (line: string | null) => {
+    const gen = ++bootGenRef.current;
     setPhase("chat");
     setMicError(null);
     speechRef.current.stop();
     const mic = await openMic();
+    if (gen !== bootGenRef.current) return; // fell asleep meanwhile
     if (!mic.ok) {
       setMicError(mic.error);
       return;
     }
     // Lumi's voice choice (ElevenLabs or not) must be known before she speaks.
     for (let i = 0; i < 60 && !speechRef.current.ready; i++) await new Promise((r) => setTimeout(r, 50));
+    if (gen !== bootGenRef.current) return;
     bootedRef.current = true;
+    if (!line) return voiceRef.current.start({ gesture: false });
     voiceRef.current.start({ gesture: false, paused: true });
     sayLocal(line, () => voiceRef.current.resume());
   };
 
   /** Lumi stops listening and closes the microphone completely. */
   const fallAsleep = () => {
+    bootGenRef.current++; // a start still in progress must not wake her up again
     voiceRef.current.end();
     releaseMic();
     setSleeping(true);
@@ -365,10 +381,23 @@ export default function Demo() {
     sayLocal(GOODBYE, fallAsleep);
   };
 
-  const wake = () => {
+  /** `touch`: woken by a touch on the screen – the one moment iPhone allows anything. */
+  const wake = (how: "tap" | "touch" = "tap") => {
     if (!sleepingRef.current) return;
+    retriesRef.current = 0;
+    setSleepNote(null);
     setSleeping(false);
-    debugEvent("Lumi heräsi");
+    speechRef.current.clearBlocked(); // this wake-up shows whether the voice is still blocked
+    debugEvent(`Lumi heräsi (${how === "touch" ? "näytön kosketus" : "taputus"})`);
+    if (how === "touch" && appleWebKit()) {
+      // iPhone: start listening inside this touch (later it may refuse); no line, or she would hear herself.
+      bootGenRef.current++;
+      setMicError(null);
+      void openMic();
+      bootedRef.current = true;
+      voiceRef.current.start();
+      return;
+    }
     void boot(WAKE_UP);
   };
 
@@ -401,56 +430,59 @@ export default function Demo() {
   }, [voice.state]);
 
   // A tap on the toy wakes Lumi; only the motion sensor listens while she sleeps.
-  useTapWake(sleeping, wake);
+  useTapWake(sleeping, () => wake("tap"));
   // Toy mode and sleep keep the screen on: a locked phone could not notice the tap.
   // …and so does a spoken conversation: the screen must not go dark while Lumi talks.
   useWakeLock(toy || sleeping || voice.active);
 
-  /** Why toy mode needs a touch right now (null: it doesn't). */
-  const tapReason =
+  /*
+   * Toy mode has two states only: awake or asleep. When something keeps Lumi from listening
+   * or talking, she first tries again quietly; if that does not help, she falls asleep, and a
+   * tap on the toy (or the screen) wakes her and tries everything again.
+   */
+  const problem =
     !toy || sleeping
       ? null
       : micError
-        ? `Mikki ei auennut (${micError}).`
+        ? `mikki ei auennut (${micError})`
         : voice.state === "error"
-          ? voice.issue?.title ?? "Mikki ei toimi."
+          ? `puheentunnistus: ${voice.issue?.technical ?? voice.issue?.title ?? "virhe"}`
           : voice.state === "tap"
-            ? "Puhelin haluaa kosketuksen ennen kuuntelua."
+            ? "kuuntelu ei käynnistynyt ilman kosketusta"
             : speech.blocked
-              ? "Puhelin esti Lumin äänen."
+              ? "puhelin esti Lumin äänen"
               : null;
-
-  // Ask for attention: vibrate (where the browser allows it) when a touch is needed.
+  // Listening works again: the next problem gets its own retries.
   useEffect(() => {
-    if (tapReason === null) return;
-    let ok = false;
-    try {
-      ok = navigator.vibrate?.([200, 100, 200]) ?? false;
-    } catch {
-      /* not supported */
-    }
-    debugEvent(`Taputa minua -näkymä (${tapReason}) – värinä ${ok ? "ok" : "ei käytettävissä"}`);
-  }, [tapReason]);
+    if (voice.state === "listening" || voice.state === "hearing") retriesRef.current = 0;
+  }, [voice.state]);
 
-  /** The touch on "Taputa minua": now everything is allowed, so start whatever was blocked. */
-  const onTapOverlay = () => {
-    void requestMotionPermission();
-    if (micError || voice.state === "error") {
-      voice.dismiss();
-      void boot(GREETING);
-    } else if (voice.state === "tap") {
-      voice.tapToTalk();
-    } else if (speech.blocked) {
-      // This touch unlocked audio: say the last line again, then listen.
-      const last = [...msgsRef.current].reverse().find((m) => m.role === "lumi" && m.status === "done");
-      voice.pause();
-      speech.speak(last?.id ?? nextId(), last?.text ?? GREETING, () => voiceRef.current.resume());
+  useEffect(() => {
+    if (!problem) return;
+    // Blocked audio needs a touch – retrying without one cannot help.
+    if (!speech.blocked && retriesRef.current < RETRY_DELAYS_MS.length) {
+      const delay = RETRY_DELAYS_MS[retriesRef.current++];
+      debugEvent(`Ongelma: ${problem} – uusi yritys ${delay / 1000} s päästä (${retriesRef.current}/${RETRY_DELAYS_MS.length})`);
+      const t = setTimeout(() => {
+        if (micError) void boot(null);
+        else if (voiceRef.current.state === "error") voiceRef.current.start({ gesture: false });
+        else if (voiceRef.current.state === "tap") voiceRef.current.retryListen();
+      }, delay);
+      return () => clearTimeout(t);
     }
-  };
+    debugSet({ autoSleep: `${new Date().toTimeString().slice(0, 8)} ${problem}` });
+    setSleepNote(problem);
+    debugEvent(`Lumi nukahti itsestään: ${problem}`);
+    // Tell the child why Lumi went quiet – if her voice can be heard at all.
+    if (speech.blocked) return fallAsleep();
+    voiceRef.current.pause();
+    sayLocal(TIRED, fallAsleep);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [problem]);
 
   const onSleepTouch = () => {
     void requestMotionPermission(); // iOS: allows waking by a tap on the toy next time
-    wake();
+    wake("touch");
   };
 
   const startVoice = () => {
@@ -644,7 +676,7 @@ export default function Demo() {
     return (
       <>
         {sleeping ? (
-          <SleepView onWake={onSleepTouch} />
+          <SleepView onWake={onSleepTouch} note={sleepNote} />
         ) : (
           <ToyView
             glow={glow}
@@ -657,7 +689,6 @@ export default function Demo() {
             onDiagnostics={() => setDiagnostics(true)}
           />
         )}
-        <TapOverlay reason={tapReason} onTap={onTapOverlay} />
         {diagnosticsPanel}
       </>
     );
