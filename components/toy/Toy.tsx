@@ -59,6 +59,7 @@ export function ToyView({
   status,
   transcript,
   lastLine,
+  onTouch,
   onDiagnostics,
 }: {
   glow: GlowState;
@@ -68,11 +69,19 @@ export function ToyView({
   status: string;
   transcript: string;
   lastLine: string | null;
+  /** A touch on the screen (Lumi waiting: listen again). */
+  onTouch: () => void;
   onDiagnostics: () => void;
 }) {
   return (
     // iPhone: a touch while Lumi is awake also allows waking her later by tapping the toy.
-    <FullScreen onClick={() => void requestMotionPermission()} label="Lumi">
+    <FullScreen
+      onClick={() => {
+        void requestMotionPermission();
+        onTouch();
+      }}
+      label="Lumi"
+    >
       <Glow state={glow} hearing={hearing} />
       <button
         onClick={(e) => {

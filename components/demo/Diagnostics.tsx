@@ -17,6 +17,7 @@ const SESSION: Record<SessionState, string> = {
   hearing: "kuulee puhetta",
   paused: "tauolla (Lumi miettii tai puhuu)",
   tap: "odottaa mikin painallusta",
+  waiting: "odottaa taputusta (kuunteluikkuna päättyi)",
   error: "virhe",
 };
 

@@ -59,6 +59,14 @@ const GOODBYE = "Heippa! Nyt nukahdan. Kun haluat jutella taas, taputa minua kev
 const WAKE_UP = "Olen taas hereillä!";
 /** Said before Lumi falls asleep by herself (she could not keep listening or talking). */
 const TIRED = "Nyt minua väsyttää. Taputa minua, niin jutellaan taas.";
+/**
+ * Toy mode: after Lumi has spoken, listening may restart this many times after ending in
+ * silence (Android ends it after ~5–8 s and beeps at every start). Then the microphone goes
+ * off and Lumi waits quietly until the child taps the toy: 1 = about 10–16 s and two beeps.
+ */
+const TOY_LISTEN_RESTARTS = 1;
+const WAIT_FIRST = "Mieti rauhassa. Taputa minua, kun olet valmis vastaamaan.";
+const WAIT_AGAIN = "Taputa minua, kun olet valmis.";
 /** Toy mode: if the child says nothing for this long, Lumi takes a nap (microphone off). */
 const TOY_IDLE_SLEEP_MS = 60_000;
 const NAP = "Taidan ottaa pienet nokoset. Taputa minua, kun haluat jutella taas.";
@@ -362,8 +370,8 @@ export default function Demo() {
     for (let i = 0; i < 60 && !speechRef.current.ready; i++) await new Promise((r) => setTimeout(r, 50));
     if (gen !== bootGenRef.current) return;
     bootedRef.current = true;
-    if (!line) return voiceRef.current.start({ gesture: false });
-    voiceRef.current.start({ gesture: false, paused: true });
+    if (!line) return voiceRef.current.start({ gesture: false, listenWindow: TOY_LISTEN_RESTARTS });
+    voiceRef.current.start({ gesture: false, paused: true, listenWindow: TOY_LISTEN_RESTARTS });
     sayLocal(line, () => voiceRef.current.resume());
   };
 
@@ -398,7 +406,7 @@ export default function Demo() {
       setMicError(null);
       void openMic();
       bootedRef.current = true;
-      voiceRef.current.start();
+      voiceRef.current.start({ listenWindow: TOY_LISTEN_RESTARTS });
       return;
     }
     void boot(WAKE_UP);
@@ -433,7 +441,25 @@ export default function Demo() {
   }, [voice.state]);
 
   // A tap on the toy wakes Lumi; only the motion sensor listens while she sleeps.
-  useTapWake(sleeping, () => wake("tap"));
+  useTapWake(sleeping || (toy && voice.state === "waiting"), () => (sleepingRef.current ? wake("tap") : continueListening("tap")));
+
+  /** The child tapped while Lumi was waiting quietly: listen again (one beep on Android). */
+  const continueListening = (how: "tap" | "touch") => {
+    if (voiceRef.current.state !== "waiting") return;
+    speechRef.current.stop(); // the child wants to answer – no need to finish "Mieti rauhassa…"
+    debugEvent(`Kuuntelu jatkuu (${how === "touch" ? "näytön kosketus" : "taputus"})`);
+    if (how === "touch" && appleWebKit()) voiceRef.current.tapToTalk();
+    else voiceRef.current.retryListen();
+  };
+
+  // The listening window passed in silence: tell the child once, kindly, how to go on.
+  const waitedRef = useRef(0);
+  useEffect(() => {
+    if (!toy || voice.state !== "waiting") return;
+    debugEvent("Kuunteluikkuna päättyi – mikki pois, odotetaan taputusta");
+    sayLocal(waitedRef.current++ ? WAIT_AGAIN : WAIT_FIRST);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice.state, toy]);
   // Toy mode and sleep keep the screen on: a locked phone could not notice the tap.
   // …and so does a spoken conversation: the screen must not go dark while Lumi talks.
   useWakeLock(toy || sleeping || voice.active);
@@ -457,7 +483,8 @@ export default function Demo() {
               : null;
   // Toy mode: a quiet minute while Lumi is listening and nobody talks → a nap. Any word,
   // Lumi thinking or speaking starts the minute again.
-  const listeningQuietly = toy && !sleeping && !busy && !speechSpeaking && (voice.state === "listening" || voice.state === "hearing");
+  const listeningQuietly =
+    toy && !sleeping && !busy && !speechSpeaking && (voice.state === "listening" || voice.state === "hearing" || voice.state === "waiting");
   useEffect(() => {
     if (!listeningQuietly) return;
     const t = setTimeout(() => {
@@ -482,7 +509,7 @@ export default function Demo() {
       debugEvent(`Ongelma: ${problem} – uusi yritys ${delay / 1000} s päästä (${retriesRef.current}/${RETRY_DELAYS_MS.length})`);
       const t = setTimeout(() => {
         if (micError) void boot(null);
-        else if (voiceRef.current.state === "error") voiceRef.current.start({ gesture: false });
+        else if (voiceRef.current.state === "error") voiceRef.current.start({ gesture: false, listenWindow: TOY_LISTEN_RESTARTS });
         else if (voiceRef.current.state === "tap") voiceRef.current.retryListen();
       }, delay);
       return () => clearTimeout(t);
@@ -683,7 +710,9 @@ export default function Demo() {
     const lastLine = [...msgs].reverse().find((m) => m.role === "lumi" && m.status === "done")?.text ?? null;
     const status = audible
       ? "Puhun"
-      : busy || voice.state === "paused"
+      : voice.state === "waiting"
+        ? "Odotan – taputa, kun olet valmis"
+        : busy || voice.state === "paused"
           ? "Mietin…"
           : voice.state === "hearing"
             ? "Kuulen sinut"
@@ -703,6 +732,7 @@ export default function Demo() {
             status={status}
             transcript={voice.transcript}
             lastLine={lastLine}
+            onTouch={() => continueListening("touch")}
             onDiagnostics={() => setDiagnostics(true)}
           />
         )}

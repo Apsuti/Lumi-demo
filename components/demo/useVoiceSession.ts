@@ -25,6 +25,7 @@ export type SessionState =
   | "hearing" // voice detected, words arriving
   | "paused" // Lumi is thinking or speaking – recognition stopped on purpose
   | "tap" // waiting for a press of the mic (the browser only listens after a tap)
+  | "waiting" // toy mode: the listening window passed in silence – mic off until a tap
   | "error";
 
 type RecResult = ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
@@ -119,6 +120,13 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   /** Started without a tap (NFC tag, waking by a tap on the toy): a refused start means "tap needed". */
   const autoStartRef = useRef(false);
   const captureRetries = useRef(0);
+  /**
+   * Toy mode: how many times listening may restart after ending in silence before the session
+   * waits quietly (null: restart forever). Android beeps at every start, so a child who is
+   * thinking would otherwise hear a beep every few seconds.
+   */
+  const listenWindowRef = useRef<number | null>(null);
+  const quietEnds = useRef(0);
   const meterRef = useRef<{ stream: MediaStream; ctx: AudioContext; raf: number } | null>(null);
   const onUtteranceRef = useRef(onUtterance);
   onUtteranceRef.current = onUtterance;
@@ -327,6 +335,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       const isFinal = e.results[e.results.length - 1].isFinal;
       vlog("2. Transcript received", { text, isFinal, results: e.results.length });
       networkErrors.current = 0;
+      quietEnds.current = 0;
       textRef.current = text;
       setTranscript(text);
       setState("hearing");
@@ -371,6 +380,13 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       if (textRef.current) return commit("onend");
       // Noise may have raised "hearing" without a single word: back to plain listening.
       setState((s) => (s === "hearing" ? "listening" : s));
+      // The listening window is over: stop restarting (no more beeps) and wait for a tap.
+      if (listenWindowRef.current !== null && activeRef.current && !pausedRef.current && ++quietEnds.current > listenWindowRef.current) {
+        pausedRef.current = true;
+        debugSet({ recognitionLast: "kuunteluikkuna päättyi – odottaa taputusta" });
+        setState("waiting");
+        return;
+      }
       if (activeRef.current && !pausedRef.current) resumeTimer.current = setTimeout(() => listen(), 250);
     };
 
@@ -393,7 +409,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
    * `gesture: false` – started without a tap (NFC tag, waking by a tap on the toy).
    * `paused: true` – the session is on but listening waits for `resume()` (Lumi greets first).
    */
-  const start = useCallback((opts?: { gesture?: boolean; paused?: boolean }) => {
+  const start = useCallback((opts?: { gesture?: boolean; paused?: boolean; listenWindow?: number }) => {
     if (activeRef.current) return;
     // HTTPS, Web Speech API, in-app browsers: known before any permission prompt.
     const blocker = preflight();
@@ -405,6 +421,8 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     firstStartRef.current = true;
     needsTapRef.current = false;
     autoStartRef.current = opts?.gesture === false;
+    listenWindowRef.current = opts?.listenWindow ?? null;
+    quietEnds.current = 0;
     captureRetries.current = 0;
     debugSet({ recognitionMode: "jatkuva – kuuntelu jatkuu itsestään Lumin jälkeen" });
     setIssue(null);
@@ -423,6 +441,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   /** In "tap" mode: the child pressed the mic to answer. Runs inside the tap, as iPhone requires. */
   const tapToTalk = useCallback(() => {
     if (!activeRef.current) return;
+    quietEnds.current = 0;
     clear(resumeTimer);
     pausedRef.current = false;
     setState("starting");
@@ -437,6 +456,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
   const retryListen = useCallback(() => {
     if (!activeRef.current) return;
     needsTapRef.current = false;
+    quietEnds.current = 0;
     clear(resumeTimer);
     pausedRef.current = false;
     setState("starting");
@@ -463,6 +483,7 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
     resumeTimer.current = setTimeout(() => {
       if (!activeRef.current) return;
       pausedRef.current = false;
+      quietEnds.current = 0;
       armIdle();
       if (needsTapRef.current) return setState("tap");
       setState("listening");
