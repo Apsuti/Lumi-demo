@@ -59,6 +59,9 @@ const GOODBYE = "Heippa! Nyt nukahdan. Kun haluat jutella taas, taputa minua kev
 const WAKE_UP = "Olen taas hereillä!";
 /** Said before Lumi falls asleep by herself (she could not keep listening or talking). */
 const TIRED = "Nyt minua väsyttää. Taputa minua, niin jutellaan taas.";
+/** Toy mode: if the child says nothing for this long, Lumi takes a nap (microphone off). */
+const TOY_IDLE_SLEEP_MS = 60_000;
+const NAP = "Taidan ottaa pienet nokoset. Taputa minua, kun haluat jutella taas.";
 /** Toy mode: quiet retries before Lumi falls asleep by herself. */
 const RETRY_DELAYS_MS = [1000, 3000, 6000];
 
@@ -452,6 +455,20 @@ export default function Demo() {
             : speech.blocked
               ? "puhelin esti Lumin äänen"
               : null;
+  // Toy mode: a quiet minute while Lumi is listening and nobody talks → a nap. Any word,
+  // Lumi thinking or speaking starts the minute again.
+  const listeningQuietly = toy && !sleeping && !busy && !speechSpeaking && (voice.state === "listening" || voice.state === "hearing");
+  useEffect(() => {
+    if (!listeningQuietly) return;
+    const t = setTimeout(() => {
+      debugEvent(`Ei puhetta ${TOY_IDLE_SLEEP_MS / 1000} s → Lumi nukahtaa`);
+      voiceRef.current.pause();
+      sayLocal(NAP, fallAsleep);
+    }, TOY_IDLE_SLEEP_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listeningQuietly, voice.transcript]);
+
   // Listening works again: the next problem gets its own retries.
   useEffect(() => {
     if (voice.state === "listening" || voice.state === "hearing") retriesRef.current = 0;

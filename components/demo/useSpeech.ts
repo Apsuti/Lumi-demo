@@ -16,8 +16,16 @@ const AUTO_KEY = "lumi.autoSpeak";
  * iOS only counts touchend/click/keydown as such a tap – not pointerdown/touchstart.
  */
 const GESTURES = ["touchend", "click", "keydown"] as const;
-function silentWav() {
-  const samples = 800; // 0.1 s at 8 kHz, 8-bit mono
+
+/**
+ * Silence played before each turn of Lumi's natural voice. A phone's loudspeaker (especially
+ * right after the microphone was in use) wakes up only when sound starts and swallows the
+ * first half second – "Olen taas hereillä!" became just "hereillä". The silence is played
+ * while the first sentence is still being fetched, so it adds little or no delay.
+ */
+const LEAD_IN_S = 0.45;
+function silentWav(seconds = 0.1) {
+  const samples = Math.round(8000 * seconds); // 8 kHz, 8-bit mono
   const buf = new DataView(new ArrayBuffer(44 + samples));
   const str = (o: number, s: string) => [...s].forEach((c, i) => buf.setUint8(o + i, c.charCodeAt(0)));
   str(0, "RIFF");
@@ -306,6 +314,8 @@ export function useSpeech() {
 
       type Chunk = { text: string; audio?: Promise<string | null> };
       const queue: Chunk[] = [];
+      /** The silent lead-in of this turn; the first sentence waits until it has played. */
+      let leadIn: Promise<boolean> | null = null;
       let pending = "";
       let batch = ""; // finished sentences after the first, spoken together as one request
       let prev = "";
@@ -371,10 +381,15 @@ export function useSpeech() {
           if (!micHeld()) setAudioSession("playback");
           setSpeakingId(id);
           console.info(`[Lumi viive] puhe alkaa ${Math.round(performance.now() - t0)} ms vastauksen alusta`);
+          if (useEleven) leadIn = playAudio(silentWav(LEAD_IN_S), run);
         }
         let ok = false;
         if (useEleven) {
           const src = chunk.audio ? await chunk.audio : ttsUrl(chunk.text, "");
+          if (leadIn) {
+            await leadIn; // the loudspeaker is awake now
+            leadIn = null;
+          }
           if (src && live()) ok = await playAudio(src, run);
         }
         if (!ok && live()) {

@@ -369,6 +369,8 @@ export function useVoiceSession(onUtterance: (text: string) => void) {
       recRef.current = null;
       // Android ends the session right after the last result: that is the child's turn.
       if (textRef.current) return commit("onend");
+      // Noise may have raised "hearing" without a single word: back to plain listening.
+      setState((s) => (s === "hearing" ? "listening" : s));
       if (activeRef.current && !pausedRef.current) resumeTimer.current = setTimeout(() => listen(), 250);
     };
 
